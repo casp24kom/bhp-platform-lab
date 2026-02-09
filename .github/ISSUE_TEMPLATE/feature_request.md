@@ -2,6 +2,10 @@
 name: Feature request
 about: Suggest an idea or enhancement
 title: "feat: <short description>"
+---
+name: Feature request
+about: Suggest an idea or enhancement
+title: "feat: <short description>"
 labels: enhancement
 assignees: ""
 ---
@@ -16,6 +20,7 @@ assignees: ""
 <!-- Any other approaches you considered? -->
 
 ## Scope
+
 - [ ] Small (few lines / doc change)
 - [ ] Medium (new module / workflow / terraform updates)
 - [ ] Large (architecture change)
