@@ -48,7 +48,10 @@ def rag_self_test():
         with get_sf_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT CURRENT_VERSION()")
-                sf_version = cur.fetchone()[0]
+                row = cur.fetchone()
+                if row is None:
+                    raise RuntimeError("Snowflake returned no rows for CURRENT_VERSION()")
+                sf_version = row[0]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Snowflake SQL auth failed: {e}")
 
