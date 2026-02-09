@@ -197,6 +197,9 @@ crash.*.log
 *.p12
 *.crt
 *.cer
+*.p8
+*.p12
+**/snowflake_rsa_key*
 
 # Python
 .venv/
