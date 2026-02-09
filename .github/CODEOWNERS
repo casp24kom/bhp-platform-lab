@@ -1,0 +1,8 @@
+# Code owners for this repository.
+
+* @casp24kom
+
+# Optional: finer control
+/.github/ @casp24kom
+/deploy/  @casp24kom
+/app/     @casp24kom

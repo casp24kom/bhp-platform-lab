@@ -179,3 +179,27 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+.terraform.lock.hcl
+
+# Local env / secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.crt
+*.cer
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
