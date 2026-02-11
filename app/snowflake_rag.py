@@ -272,6 +272,15 @@ def _select_chunks_for_prompt(chunks: List[Dict[str, Any]]) -> List[Dict[str, An
         return pick(5)
     return pick(3)
 
+def _extract_used_tags(answer: str, allowed_tags: List[str]) -> List[str]:
+    used = []
+    for t in allowed_tags:
+        if t in answer:
+            used.append(t)
+    return used
+
+def _count_unique_tags(answer: str, allowed_tags: List[str]) -> int:
+    return len(set(_extract_used_tags(answer, allowed_tags)))
 
 def _bullets_fully_grounded(answer: str, allowed_tags: List[str]) -> bool:
     """
@@ -332,64 +341,95 @@ def _bullets_fully_grounded(answer: str, allowed_tags: List[str]) -> bool:
     return True
 
 
-def generate_answer_in_snowflake(question: str, chunks: List[Dict[str, Any]]) -> str:
-    """
-    Calls Snowflake AI_COMPLETE with strict grounding instructions.
-    Enforces that every bullet ends with an allowed citation tag.
-    """
-    chunks_for_prompt = _select_chunks_for_prompt(chunks)
+def _count_dash_bullets(answer: str) -> int:
+    if not answer:
+        return 0
+    lines = [ln.strip() for ln in answer.splitlines() if ln.strip()]
+    return sum(1 for ln in lines if ln.startswith("- "))
 
-    # Optional: ensure we don't include the exact same (DOC_ID, CHUNK_ID) twice
-    seen = set()
-    deduped = []
-    for c in chunks_for_prompt:
-        key = (c.get("DOC_ID"), c.get("CHUNK_ID"))
-        if key in seen:
-            continue
-    seen.add(key)
-    deduped.append(c)
-    chunks_for_prompt = deduped
+
+def generate_answer_in_snowflake(question: str, chunks: List[Dict[str, Any]]) -> str:
+    chunks_for_prompt = _select_chunks_for_prompt(chunks)
 
     sources_block, allowed_tags = _build_sources(chunks_for_prompt)
     risk_tier = _max_risk_tier(chunks_for_prompt)
 
+    min_bullets = 8 if risk_tier == "CRITICAL" else (5 if risk_tier == "MEDIUM" else 3)
+
+    # Practical uniqueness target (don’t make it impossible)
+    min_unique_tags = min(len(allowed_tags), max(2, min_bullets // 2))
+
     prompt = (
-    "You are an operational mining SOP assistant.\n"
-    "Hard rules (the output is automatically rejected if you break these):\n"
-    "1) Use ONLY the SOURCES below.\n"
-    "2) Write ONLY '-' bullet points (no numbering).\n"
-    "3) Every bullet MUST end with exactly ONE citation tag exactly as shown in SOURCES.\n"
-    "4) Do NOT put anything after the citation tag (no extra words).\n"
-    "5) If SOURCES are insufficient, reply exactly: CANNOT_ANSWER_FROM_SOURCES\n\n"
-    "Example format (use the real tags from SOURCES):\n"
-    "- Do the thing. [DOC_ID|DOC_NAME#chunkN]\n\n"
-    f"RISK_TIER: {risk_tier}\n\n"
-    f"QUESTION:\n{question}\n\n"
-    f"SOURCES:\n{sources_block}\n\n"
-    "OUTPUT:\n"
-)
+        "You are an operational mining SOP assistant.\n"
+        "Hard rules (auto-rejected if broken):\n"
+        "1) Use ONLY the SOURCES below.\n"
+        "2) Write ONLY '-' bullet points.\n"
+        f"3) Provide AT LEAST {min_bullets} bullet points.\n"
+        "4) Every bullet MUST end with exactly ONE citation tag exactly as shown in SOURCES.\n"
+        "5) Do NOT put anything after the citation tag.\n"
+        f"6) Use AT LEAST {min_unique_tags} DIFFERENT citation tags.\n"
+        "7) If SOURCES are insufficient, reply exactly: CANNOT_ANSWER_FROM_SOURCES\n\n"
+        f"RISK_TIER: {risk_tier}\n\n"
+        f"QUESTION:\n{question}\n\n"
+        f"SOURCES:\n{sources_block}\n\n"
+        "OUTPUT:\n"
+    )
 
     sql = "SELECT AI_COMPLETE(%s, %s) AS answer"
 
-    with get_sf_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, (AI_MODEL, prompt))
-            row = cur.fetchone()
-            ans = (row[0] if row else "") or ""
-    # Normalize common bullet formatting issues (leading space before '-')
-    ans = _strip_wrapping_quotes(ans)
-    ans = re.sub(r"(?m)^\s+-\s+", "- ", ans)
-    
+    def _call_llm(p: str) -> str:
+        with get_sf_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (AI_MODEL, p))
+                row = cur.fetchone()
+                return (row[0] if row else "") or ""
+
+    def _normalize(ans: str) -> str:
+        ans = _strip_wrapping_quotes(ans)
+        ans = re.sub(r"(?m)^\s+-\s+", "- ", ans).strip()
+        return ans
+
+    def _passes(ans: str) -> bool:
+        if ans.strip() == "CANNOT_ANSWER_FROM_SOURCES":
+            return True  # handled by caller
+        if not _bullets_fully_grounded(ans, allowed_tags):
+            return False
+        if _count_dash_bullets(ans) < min_bullets:
+            return False
+        if _count_unique_tags(ans, allowed_tags) < min_unique_tags:
+            return False
+        return True
+
+    # -------- First attempt
+    ans = _normalize(_call_llm(prompt))
 
     if ans.strip() == "CANNOT_ANSWER_FROM_SOURCES":
         return "Cannot answer from approved sources."
 
-    # Strong enforcement: every bullet block must end with an allowed tag (robust to formatting)
-    if not _bullets_fully_grounded(ans, allowed_tags):
-        return "Cannot answer from approved sources. (Model did not provide fully grounded citations.)"
+    if _passes(ans):
+        return ans
 
-    ans = re.sub(r"\n+Sources:\n.*$", "", ans, flags=re.IGNORECASE | re.DOTALL).strip()
-    return ans
+    # -------- Retry once (make it *much* stricter)
+    retry_prompt = (
+        prompt
+        + "\nSTRICT RETRY:\n"
+          f"- Output EXACTLY {min_bullets} '-' bullets.\n"
+          f"- Use AT LEAST {min_unique_tags} DIFFERENT citation tags.\n"
+          "- Do NOT reuse a tag if another unused tag exists.\n"
+          "- End each bullet with the tag and NOTHING after it.\n"
+          "- No extra text before/after bullets.\n"
+    )
+
+    ans2 = _normalize(_call_llm(retry_prompt))
+
+    if ans2.strip() == "CANNOT_ANSWER_FROM_SOURCES":
+        return "Cannot answer from approved sources."
+
+    if _passes(ans2):
+        return ans2
+
+    # Fail closed
+    return "Cannot answer from approved sources. (Model output did not meet grounding/coverage requirements.)"
 
 
 def audit_rag(
