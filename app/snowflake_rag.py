@@ -272,8 +272,6 @@ def _select_chunks_for_prompt(chunks: List[Dict[str, Any]]) -> List[Dict[str, An
         return pick(5)
     return pick(3)
 
-import re
-from typing import List
 
 def _bullets_fully_grounded(answer: str, allowed_tags: List[str]) -> bool:
     """
@@ -340,6 +338,18 @@ def generate_answer_in_snowflake(question: str, chunks: List[Dict[str, Any]]) ->
     Enforces that every bullet ends with an allowed citation tag.
     """
     chunks_for_prompt = _select_chunks_for_prompt(chunks)
+
+    # Optional: ensure we don't include the exact same (DOC_ID, CHUNK_ID) twice
+    seen = set()
+    deduped = []
+    for c in chunks_for_prompt:
+        key = (c.get("DOC_ID"), c.get("CHUNK_ID"))
+        if key in seen:
+            continue
+    seen.add(key)
+    deduped.append(c)
+    chunks_for_prompt = deduped
+
     sources_block, allowed_tags = _build_sources(chunks_for_prompt)
     risk_tier = _max_risk_tier(chunks_for_prompt)
 
@@ -366,8 +376,10 @@ def generate_answer_in_snowflake(question: str, chunks: List[Dict[str, Any]]) ->
             cur.execute(sql, (AI_MODEL, prompt))
             row = cur.fetchone()
             ans = (row[0] if row else "") or ""
-
+    # Normalize common bullet formatting issues (leading space before '-')
     ans = _strip_wrapping_quotes(ans)
+    ans = re.sub(r"(?m)^\s+-\s+", "- ", ans)
+    
 
     if ans.strip() == "CANNOT_ANSWER_FROM_SOURCES":
         return "Cannot answer from approved sources."
