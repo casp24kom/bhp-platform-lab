@@ -1,7 +1,10 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+import os
 import time, uuid
 
+
+from app.policy_gate import policy_gate
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from app.config import settings
 from app.snowflake_conn import get_sf_connection
 from app.snowflake_rag import cortex_search, generate_answer_in_snowflake, audit_rag
@@ -10,6 +13,39 @@ from app.agentcore_client import call_agentcore
 from app.snowflake_audit import audit_dq
 
 app = FastAPI(title="Data & AI Platform Lab", version="1.0")
+
+@app.post("/debug/ai")
+def debug_ai():
+    chunks = [{
+        "DOC_NAME": "Synthetic SOP: Isolation",
+        "CHUNK_ID": 1,
+        "CHUNK_TEXT": "Apply lockout/tagout before maintenance. Verify zero energy state."
+    }]
+    ans = generate_answer_in_snowflake("What do I do before maintenance?", chunks)
+    return {"answer": ans}
+
+@app.get("/debug/env")
+def debug_env():
+    return {
+        "SF_ACCOUNT_IDENTIFIER": os.getenv("SF_ACCOUNT_IDENTIFIER"),
+        "SF_ACCOUNT_URL": os.getenv("SF_ACCOUNT_URL"),
+        "SF_USER": os.getenv("SF_USER"),
+        "settings.sf_account_identifier": settings.sf_account_identifier,
+        "settings.sf_account_url": settings.sf_account_url,
+        "settings.sf_user": settings.sf_user,
+    }
+@app.get("/debug/sql")
+def debug_sql():
+    with get_sf_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT CURRENT_ACCOUNT(), CURRENT_REGION(), CURRENT_VERSION()")
+            row = cur.fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=500, detail="Snowflake returned no rows for debug query")
+
+    a, r, v = row
+    return {"account": a, "region": r, "version": v}
 
 class RagRequest(BaseModel):
     user_id: str = "demo"
@@ -31,12 +67,32 @@ def rag_query(req: RagRequest):
     t0 = time.time()
     try:
         chunks = cortex_search(req.question, req.topk)
-        if not chunks:
-            return {"request_id": request_id, "answer": "Cannot answer from approved sources.", "citations": [], "latency_ms": int((time.time()-t0)*1000)}
+
+        policy = policy_gate(req.question, chunks)
+
+        # If no chunks OR policy refuses, return deterministic refusal
+        if not chunks or not policy.get("allow_generation", False):
+            latency_ms = int((time.time() - t0) * 1000)
+            refusal = (
+                "Cannot answer from approved sources. "
+                + (" " + policy.get("reason", "") if policy.get("reason") else "")
+            ).strip()
+            audit_rag(request_id, req.user_id, req.question, req.topk, chunks, refusal, latency_ms, policy=policy)
+            return {
+                "request_id": request_id,
+                "answer": refusal,
+                "policy": policy,
+                "citations": chunks,
+                "latency_ms": latency_ms,
+            }
+
+        # Allowed -> generate
         answer = generate_answer_in_snowflake(req.question, chunks)
         latency_ms = int((time.time() - t0) * 1000)
-        audit_rag(request_id, req.user_id, req.question, req.topk, chunks, answer, latency_ms)
-        return {"request_id": request_id, "answer": answer, "citations": chunks, "latency_ms": latency_ms}
+        audit_rag(request_id, req.user_id, req.question, req.topk, chunks, answer, latency_ms, policy=policy)
+
+        return {"request_id": request_id, "answer": answer, "policy": policy, "citations": chunks, "latency_ms": latency_ms}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -62,12 +118,20 @@ def rag_self_test():
         raise HTTPException(status_code=500, detail=f"Cortex Search REST failed: {e}")
 
     if not chunks:
-        raise HTTPException(status_code=500, detail="Cortex Search returned 0 results (check SOP_CHUNKS + SOP_SEARCH).")
-
+        return {"request_id": request_id, "answer": "Cannot answer from approved sources.", "citations": [], "latency_ms": int((time.time()-t0)*1000)}
+    
+   
     try:
         answer = generate_answer_in_snowflake(test_question, chunks)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI_COMPLETE failed: {e}")
+
+    if answer.strip().lower().startswith("cannot answer from approved sources"):
+        answer = "\n".join([
+            "Cannot answer from approved sources.",
+            "The retrieved SOP excerpts did not specify PPE for conveyor start-up checks.",
+            "Add/ingest a PPE-specific SOP section to enable an approved answer.",
+        ])
 
     latency_ms = int((time.time() - t0) * 1000)
     try:

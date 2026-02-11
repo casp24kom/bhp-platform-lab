@@ -5,6 +5,7 @@ class Settings(BaseModel):
     app_env: str = os.getenv("APP_ENV", "prod-demo")
     data_dir: str = os.getenv("DATA_DIR", "/data")
 
+    sf_private_key_pem_path: str = os.getenv("SF_PRIVATE_KEY_PEM_PATH", "")
     sf_account_identifier: str = os.getenv("SF_ACCOUNT_IDENTIFIER", "")
     sf_account_url: str = os.getenv("SF_ACCOUNT_URL", "")
     sf_user: str = os.getenv("SF_USER", "")
@@ -21,7 +22,17 @@ class Settings(BaseModel):
 
 settings = Settings()
 
-def load_private_key_pem() -> bytes:
-    if not settings.sf_private_key_pem_b64:
-        raise RuntimeError("Missing SF_PRIVATE_KEY_PEM_B64")
-    return base64.b64decode(settings.sf_private_key_pem_b64)
+def load_private_key_pem_bytes() -> bytes:
+    """
+    Returns PEM bytes (not DER) from either:
+    - SF_PRIVATE_KEY_PEM_PATH (preferred), or
+    - SF_PRIVATE_KEY_PEM_B64 (fallback)
+    """
+    if settings.sf_private_key_pem_path:
+        with open(settings.sf_private_key_pem_path, "rb") as f:
+            return f.read()
+
+    if settings.sf_private_key_pem_b64:
+        return base64.b64decode(settings.sf_private_key_pem_b64)
+
+    raise RuntimeError("Missing SF_PRIVATE_KEY_PEM_PATH or SF_PRIVATE_KEY_PEM_B64")
