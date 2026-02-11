@@ -7,14 +7,14 @@ import re
 
 @dataclass
 class PolicyDecision:
-    
     topic: str
     allow_generation: bool
-    risk_tier: str = "LOW"
+
+    risk_tier: str = "LOW"          # LOW | MEDIUM | CRITICAL
     reason: str = ""
     matched_terms: List[str] = field(default_factory=list)
     confidence: str = "low"
-    mode: str = "grounded"  # "grounded" | "advice"
+    mode: str = "grounded"          # grounded | advice
 
 
 def decision_to_dict(d: PolicyDecision) -> Dict:
@@ -28,10 +28,6 @@ def decision_to_dict(d: PolicyDecision) -> Dict:
         "mode": d.mode,
     }
 
-
-# ----------------------------
-# Helpers
-# ----------------------------
 
 _STOPWORDS = {
     "a","an","the","and","or","to","of","in","on","for","with","before","after","during",
@@ -77,7 +73,6 @@ def _extract_specific_terms(question: str) -> List[str]:
     q = _norm(question)
     specific: List[str] = []
 
-    # Chemicals / hazards (extend as you like)
     if re.search(r"\bhf\b", q):
         specific.append("hf")
     if "hydrofluoric" in q:
@@ -89,7 +84,6 @@ def _extract_specific_terms(question: str) -> List[str]:
     if "calibrate" in q or "calibration" in q:
         specific.append("calibration")
 
-    # Model-like tokens: XZ-9000, AB123, etc.
     model_like = re.findall(r"\b[A-Z]{1,4}[-]?\d{2,6}\b", question)
     for m in model_like:
         specific.append(m.lower())
@@ -133,15 +127,6 @@ def _doc_risk_tier(chunks: List[Dict]) -> str:
     return best
 
 
-def _filter_by_max_risk(chunks: List[Dict]) -> List[Dict]:
-    tier = _doc_risk_tier(chunks)
-    if tier == "CRITICAL":
-        return [c for c in chunks if (c.get("DOC_RISK_TIER") or "").upper() == "CRITICAL"]
-    if tier == "MEDIUM":
-        return [c for c in chunks if (c.get("DOC_RISK_TIER") or "").upper() in ("MEDIUM", "CRITICAL")]
-    return chunks
-
-
 def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
     topic = _topic_from_question(question)
 
@@ -149,14 +134,12 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
         return PolicyDecision(
             topic=topic,
             allow_generation=False,
+            risk_tier="LOW",
             mode="grounded",
             reason="[NO_SOURCES] No approved sources were retrieved.",
             matched_terms=[],
             confidence="high",
         )
-
-    # Filter chunks so lower tiers don't pollute stricter decisions
-    chunks = _filter_by_max_risk(chunks)
 
     all_text = _chunk_texts(chunks)
     specific_terms = _extract_specific_terms(question)
@@ -169,28 +152,27 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
         evidence_terms = TOPIC_EVIDENCE_TERMS.get(topic, [])
         hits = _has_any(all_text, evidence_terms)
 
-        # Missing topic evidence
         if not hits:
             if risk_tier == "CRITICAL":
                 return PolicyDecision(
                     topic=topic,
                     allow_generation=False,
+                    risk_tier=risk_tier,
                     mode="grounded",
                     reason=f"[{risk_tier}] Refused: topic '{topic}' but no evidence terms found in sources.",
                     matched_terms=[],
                     confidence="high",
                 )
-            # MEDIUM/LOW: allow advice mode
             return PolicyDecision(
                 topic=topic,
                 allow_generation=True,
+                risk_tier=risk_tier,
                 mode="advice",
                 reason=f"[{risk_tier}] Not explicitly covered in SOP chunks for topic '{topic}'; providing general guidance only.",
                 matched_terms=[],
                 confidence="medium",
             )
 
-        # Specificity check (HF / model numbers etc)
         if specific_terms:
             spec_hits = _has_any(all_text, specific_terms)
             strong_specific = [t for t in spec_hits if t not in ("acid", "calibration")]
@@ -199,6 +181,7 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
                     return PolicyDecision(
                         topic=topic,
                         allow_generation=False,
+                        risk_tier=risk_tier,
                         mode="grounded",
                         reason=f"[{risk_tier}] Refused: specific terms {specific_terms} not mentioned in sources.",
                         matched_terms=_unique(hits),
@@ -207,6 +190,7 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
                 return PolicyDecision(
                     topic=topic,
                     allow_generation=True,
+                    risk_tier=risk_tier,
                     mode="advice",
                     reason=f"[{risk_tier}] SOP chunks don't mention specific terms {specific_terms}; providing general guidance only.",
                     matched_terms=_unique(hits),
@@ -216,6 +200,7 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
         return PolicyDecision(
             topic=topic,
             allow_generation=True,
+            risk_tier=risk_tier,
             mode="grounded",
             reason=f"[{risk_tier}] Passed: evidence terms found in sources: {hits}",
             matched_terms=_unique(hits),
@@ -237,6 +222,7 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
                 return PolicyDecision(
                     topic="general",
                     allow_generation=False,
+                    risk_tier=risk_tier,
                     mode="grounded",
                     reason=f"[{risk_tier}] Refused: specific terms {specific_terms} not found in sources.",
                     matched_terms=overlap,
@@ -245,19 +231,18 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
             return PolicyDecision(
                 topic="general",
                 allow_generation=True,
+                risk_tier=risk_tier,
                 mode="advice",
                 reason=f"[{risk_tier}] Specific terms {specific_terms} not found in sources; providing general guidance only.",
                 matched_terms=overlap,
                 confidence="medium",
             )
 
-    # overlap thresholds by tier
-    min_overlap = 2
     if risk_tier == "LOW":
         min_overlap = 1
     elif risk_tier == "MEDIUM":
         min_overlap = 2
-    elif risk_tier == "CRITICAL":
+    else:  # CRITICAL
         min_overlap = 3
 
     if len(overlap) < min_overlap:
@@ -265,6 +250,7 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
             return PolicyDecision(
                 topic="general",
                 allow_generation=False,
+                risk_tier=risk_tier,
                 mode="grounded",
                 reason=f"[{risk_tier}] Refused: insufficient overlap between question and retrieved sources.",
                 matched_terms=overlap,
@@ -273,6 +259,7 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
         return PolicyDecision(
             topic="general",
             allow_generation=True,
+            risk_tier=risk_tier,
             mode="advice",
             reason=f"[{risk_tier}] Weak SOP match; providing general guidance only.",
             matched_terms=overlap,
@@ -282,6 +269,7 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
     return PolicyDecision(
         topic="general",
         allow_generation=True,
+        risk_tier=risk_tier,
         mode="grounded",
         reason=f"[{risk_tier}] Passed: overlap terms found in sources: {overlap}",
         matched_terms=overlap,

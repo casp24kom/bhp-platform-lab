@@ -2,7 +2,7 @@ import os
 import time, uuid
 
 
-from app.policy_gate import enforce_policy, decision_to_dict
+from app.policy_gate import enforce_policy, decision_to_dict, _topic_from_question
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from app.config import settings
@@ -13,6 +13,7 @@ from app.agentcore_client import call_agentcore
 from app.snowflake_audit import audit_dq
 
 app = FastAPI(title="Data & AI Platform Lab", version="1.0")
+
 
 @app.post("/debug/ai")
 def debug_ai():
@@ -66,19 +67,26 @@ def rag_query(req: RagRequest):
     request_id = str(uuid.uuid4())
     t0 = time.time()
     try:
-        chunks = cortex_search(req.question, req.topk)
+        topic = _topic_from_question(req.question)
+        chunks = cortex_search(req.question, req.topk, topic_filter=topic)
 
-        #policy = policy_gate(req.question, chunks)
         policy_decision = enforce_policy(req.question, chunks)
         policy = decision_to_dict(policy_decision)
+
+        def _filter_chunks_for_generation(chs):
+            tier = (policy_decision.risk_tier or "LOW").upper()
+            if tier == "CRITICAL":
+                return [c for c in chs if (c.get("DOC_RISK_TIER") or "").upper() == "CRITICAL"]
+            if tier == "MEDIUM":
+                return [c for c in chs if (c.get("DOC_RISK_TIER") or "").upper() in ("MEDIUM", "CRITICAL")]
+            return chs
+
+        gen_chunks = _filter_chunks_for_generation(chunks)
 
         # If no chunks OR policy refuses, return deterministic refusal
         if not chunks or not policy_decision.allow_generation:
             latency_ms = int((time.time() - t0) * 1000)
-            refusal = (
-                "Cannot answer from approved sources. "
-                + (policy_decision.reason or "")
-            ).strip()
+            refusal = ("Cannot answer from approved sources. " + (policy_decision.reason or "")).strip()
             audit_rag(request_id, req.user_id, req.question, req.topk, chunks, refusal, latency_ms, policy=policy)
             return {
                 "request_id": request_id,
@@ -87,13 +95,11 @@ def rag_query(req: RagRequest):
                 "citations": chunks,
                 "latency_ms": latency_ms,
             }
-        
+
+        # Advice mode: return deterministic “guidance only” message
         if policy_decision.mode == "advice":
             latency_ms = int((time.time() - t0) * 1000)
-            msg = (
-                "General guidance only (not explicitly covered in retrieved SOP chunks). "
-                + (policy_decision.reason or "")
-            ).strip()
+            msg = ("General guidance only (not explicitly covered in retrieved SOP chunks). " + (policy_decision.reason or "")).strip()
             audit_rag(request_id, req.user_id, req.question, req.topk, chunks, msg, latency_ms, policy=policy)
             return {
                 "request_id": request_id,
@@ -102,13 +108,19 @@ def rag_query(req: RagRequest):
                 "citations": chunks,
                 "latency_ms": latency_ms,
             }
-        
-        # Allowed -> generate
-        answer = generate_answer_in_snowflake(req.question, chunks)
-        latency_ms = int((time.time() - t0) * 1000)
-        audit_rag(request_id, req.user_id, req.question, req.topk, chunks, answer, latency_ms, policy=policy)
 
-        return {"request_id": request_id, "answer": answer, "policy": policy, "citations": chunks, "latency_ms": latency_ms}
+        # Grounded mode -> generate using tier-filtered chunks
+        answer = generate_answer_in_snowflake(req.question, gen_chunks)
+        latency_ms = int((time.time() - t0) * 1000)
+        audit_rag(request_id, req.user_id, req.question, req.topk, gen_chunks, answer, latency_ms, policy=policy)
+
+        return {
+            "request_id": request_id,
+            "answer": answer,
+            "policy": policy,
+            "citations": gen_chunks,
+            "latency_ms": latency_ms,
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
