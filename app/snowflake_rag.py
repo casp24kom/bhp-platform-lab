@@ -36,9 +36,6 @@ def _safe_int(x: Any) -> int | None:
 
 
 def _normalize_chunk(r: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Normalize Cortex Search results regardless of whether fields come back upper/lower case.
-    """
     doc_id = r.get("DOC_ID") or r.get("doc_id")
     doc_name = r.get("DOC_NAME") or r.get("doc_name") or "UnknownDoc"
     chunk_id = _safe_int(r.get("CHUNK_ID") or r.get("chunk_id"))
@@ -48,6 +45,9 @@ def _normalize_chunk(r: Dict[str, Any]) -> Dict[str, Any]:
     updated_at = r.get("UPDATED_AT") or r.get("updated_at")
     score = r.get("score") or r.get("_score") or (r.get("@scores") or {}).get("cosine_similarity")
 
+    doc_topic = r.get("DOC_TOPIC") or r.get("doc_topic")
+    doc_risk_tier = r.get("DOC_RISK_TIER") or r.get("doc_risk_tier")
+
     return {
         "DOC_ID": doc_id,
         "DOC_NAME": doc_name,
@@ -56,6 +56,8 @@ def _normalize_chunk(r: Dict[str, Any]) -> Dict[str, Any]:
         "CLASSIFICATION": classification,
         "OWNER": owner,
         "UPDATED_AT": updated_at,
+        "DOC_TOPIC": doc_topic,
+        "DOC_RISK_TIER": doc_risk_tier,
         "SCORE": score,
     }
 
@@ -93,7 +95,11 @@ def _answer_contains_any_citation(answer: str, allowed_tags: List[str]) -> bool:
 # -----------------------------
 
 def cortex_search(question: str, topk: int) -> List[Dict[str, Any]]:
-    cols = ["DOC_ID", "DOC_NAME", "CHUNK_ID", "CHUNK_TEXT", "CLASSIFICATION", "OWNER", "UPDATED_AT"]
+    cols = [
+    "DOC_ID", "DOC_NAME", "CHUNK_ID", "CHUNK_TEXT",
+    "CLASSIFICATION", "OWNER", "UPDATED_AT",
+    "DOC_TOPIC", "DOC_RISK_TIER",
+]
     filter_obj = {"@eq": {"CLASSIFICATION": "PUBLIC"}}
 
     data = cortex_search_rest(

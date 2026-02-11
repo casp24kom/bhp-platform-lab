@@ -4,22 +4,28 @@ from dataclasses import dataclass, field
 from typing import List, Dict
 import re
 
+
 @dataclass
 class PolicyDecision:
+    
     topic: str
     allow_generation: bool
+    risk_tier: str = "LOW"
     reason: str = ""
     matched_terms: List[str] = field(default_factory=list)
     confidence: str = "low"
+    mode: str = "grounded"  # "grounded" | "advice"
 
 
 def decision_to_dict(d: PolicyDecision) -> Dict:
     return {
+        "risk_tier": d.risk_tier,
         "topic": d.topic,
         "allow_generation": d.allow_generation,
         "reason": d.reason,
         "matched_terms": d.matched_terms,
         "confidence": d.confidence,
+        "mode": d.mode,
     }
 
 
@@ -34,20 +40,19 @@ _STOPWORDS = {
     "must","should","can","could","would","your","our","their","it","this","that"
 }
 
+
 def _norm(s: str) -> str:
     return (s or "").lower()
 
+
 def _chunk_texts(chunks: List[Dict]) -> str:
-    parts = []
-    for c in chunks or []:
-        t = c.get("CHUNK_TEXT") or ""
-        parts.append(t)
-    return " ".join(parts).lower()
+    return " ".join([(c.get("CHUNK_TEXT") or "") for c in (chunks or [])]).lower()
+
 
 def _tokenize(text: str) -> List[str]:
-    # keep alnum + dash
     toks = re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", _norm(text))
     return [t for t in toks if t and t not in _STOPWORDS and len(t) >= 3]
+
 
 def _unique(tokens: List[str]) -> List[str]:
     seen = set()
@@ -58,6 +63,7 @@ def _unique(tokens: List[str]) -> List[str]:
             out.append(t)
     return out
 
+
 def _has_any(text: str, terms: List[str]) -> List[str]:
     hits = []
     t = _norm(text)
@@ -66,19 +72,13 @@ def _has_any(text: str, terms: List[str]) -> List[str]:
             hits.append(term)
     return hits
 
-def _extract_specific_terms(question: str) -> List[str]:
-    """
-    Pull out high-specificity items that SHOULD appear in sources if we claim coverage:
-    - chemical/hazard names (hf, hydrofluoric)
-    - model identifiers (xz-9000, ab123)
-    - very specific noun phrases
-    """
-    q = _norm(question)
 
-    specific = []
+def _extract_specific_terms(question: str) -> List[str]:
+    q = _norm(question)
+    specific: List[str] = []
 
     # Chemicals / hazards (extend as you like)
-    if "hf" in re.findall(r"\bhf\b", q):
+    if re.search(r"\bhf\b", q):
         specific.append("hf")
     if "hydrofluoric" in q:
         specific.append("hydrofluoric")
@@ -96,10 +96,9 @@ def _extract_specific_terms(question: str) -> List[str]:
 
     return _unique(specific)
 
+
 def _topic_from_question(question: str) -> str:
     q = _norm(question)
-
-    # Topic routing by keyword
     if any(k in q for k in ["confined space", "entry permit", "standby", "entrant"]):
         return "confined_space"
     if any(k in q for k in ["hot work", "welding", "cutting", "grinding", "spark", "fire watch"]):
@@ -110,14 +109,8 @@ def _topic_from_question(question: str) -> str:
         return "isolation_loto"
     if any(k in q for k in ["ppe", "personal protective", "hard hat", "safety glasses", "gloves", "boots", "respirator"]):
         return "ppe"
-
-    # default
     return "general"
 
-
-# ----------------------------
-# Topic rules
-# ----------------------------
 
 TOPIC_EVIDENCE_TERMS: Dict[str, List[str]] = {
     "confined_space": ["confined space", "permit", "entry permit", "standby", "rescue", "entrant", "supervisor"],
@@ -125,103 +118,172 @@ TOPIC_EVIDENCE_TERMS: Dict[str, List[str]] = {
     "working_at_heights": ["working at heights", "harness", "lanyard", "anchor", "fall arrest", "scaffold", "ewp", "guardrail"],
     "isolation_loto": ["loto", "lockout", "tagout", "isolate", "isolation", "prove dead", "try start", "group lock"],
     "ppe": ["ppe", "hard hat", "safety glasses", "gloves", "boots", "respirator", "hearing protection", "steel-capped"],
-    # general handled differently
 }
+
+
+def _doc_risk_tier(chunks: List[Dict]) -> str:
+    tier_order = {"LOW": 0, "MEDIUM": 1, "CRITICAL": 2}
+    best = "LOW"
+    for c in chunks or []:
+        t = (c.get("DOC_RISK_TIER") or "LOW").upper()
+        if t not in tier_order:
+            t = "LOW"
+        if tier_order[t] > tier_order[best]:
+            best = t
+    return best
+
+
+def _filter_by_max_risk(chunks: List[Dict]) -> List[Dict]:
+    tier = _doc_risk_tier(chunks)
+    if tier == "CRITICAL":
+        return [c for c in chunks if (c.get("DOC_RISK_TIER") or "").upper() == "CRITICAL"]
+    if tier == "MEDIUM":
+        return [c for c in chunks if (c.get("DOC_RISK_TIER") or "").upper() in ("MEDIUM", "CRITICAL")]
+    return chunks
 
 
 def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
     topic = _topic_from_question(question)
 
-    # No sources => deny
     if not chunks:
         return PolicyDecision(
             topic=topic,
             allow_generation=False,
-            reason="No approved sources were retrieved.",
+            mode="grounded",
+            reason="[NO_SOURCES] No approved sources were retrieved.",
             matched_terms=[],
             confidence="high",
         )
 
+    # Filter chunks so lower tiers don't pollute stricter decisions
+    chunks = _filter_by_max_risk(chunks)
+
     all_text = _chunk_texts(chunks)
     specific_terms = _extract_specific_terms(question)
+    risk_tier = _doc_risk_tier(chunks)
 
-    # ---------
-    # 1) Topic-specific evidence check
-    # ---------
+    # ----------------------------
+    # STRICT PATH (topic != general)
+    # ----------------------------
     if topic != "general":
         evidence_terms = TOPIC_EVIDENCE_TERMS.get(topic, [])
         hits = _has_any(all_text, evidence_terms)
 
-        # If topic evidence isn't present, deny
+        # Missing topic evidence
         if not hits:
-            return PolicyDecision(
-                topic=topic,
-                allow_generation=False,
-                reason=f"Policy refused: topic '{topic}' but no evidence terms found in sources.",
-                matched_terms=[],
-                confidence="high",
-            )
-
-        # ---------
-        # 2) Specificity check: if question contains specific terms, require at least one to appear in sources
-        # ---------
-        # Example: HF acid digestion should require "hf" or "hydrofluoric" or "digestion" in chunk text.
-        # Otherwise deny (prevents generic PPE answers for specific hazards).
-        if specific_terms:
-            spec_hits = _has_any(all_text, specific_terms)
-            # Require at least 1 specific hit beyond generic words like "acid"/"calibration"
-            strong_specific = [t for t in spec_hits if t not in ("acid", "calibration")]
-            if not strong_specific:
+            if risk_tier == "CRITICAL":
                 return PolicyDecision(
                     topic=topic,
                     allow_generation=False,
-                    reason=f"Policy refused: question contains specific terms {specific_terms} but sources do not mention them.",
-                    matched_terms=hits,
+                    mode="grounded",
+                    reason=f"[{risk_tier}] Refused: topic '{topic}' but no evidence terms found in sources.",
+                    matched_terms=[],
                     confidence="high",
+                )
+            # MEDIUM/LOW: allow advice mode
+            return PolicyDecision(
+                topic=topic,
+                allow_generation=True,
+                mode="advice",
+                reason=f"[{risk_tier}] Not explicitly covered in SOP chunks for topic '{topic}'; providing general guidance only.",
+                matched_terms=[],
+                confidence="medium",
+            )
+
+        # Specificity check (HF / model numbers etc)
+        if specific_terms:
+            spec_hits = _has_any(all_text, specific_terms)
+            strong_specific = [t for t in spec_hits if t not in ("acid", "calibration")]
+            if not strong_specific:
+                if risk_tier == "CRITICAL":
+                    return PolicyDecision(
+                        topic=topic,
+                        allow_generation=False,
+                        mode="grounded",
+                        reason=f"[{risk_tier}] Refused: specific terms {specific_terms} not mentioned in sources.",
+                        matched_terms=_unique(hits),
+                        confidence="high",
+                    )
+                return PolicyDecision(
+                    topic=topic,
+                    allow_generation=True,
+                    mode="advice",
+                    reason=f"[{risk_tier}] SOP chunks don't mention specific terms {specific_terms}; providing general guidance only.",
+                    matched_terms=_unique(hits),
+                    confidence="medium",
                 )
 
         return PolicyDecision(
             topic=topic,
             allow_generation=True,
-            reason=f"Policy gate passed: found evidence terms in sources: {hits}",
+            mode="grounded",
+            reason=f"[{risk_tier}] Passed: evidence terms found in sources: {hits}",
             matched_terms=_unique(hits),
             confidence="high" if len(hits) >= 3 else "medium",
         )
 
-    # ---------
-    # 3) GENERAL topic rule: default DENY unless strong overlap
-    # ---------
+    # ----------------------------
+    # GENERAL PATH
+    # ----------------------------
     q_tokens = _unique(_tokenize(question))
     c_tokens = set(_tokenize(all_text))
     overlap = [t for t in q_tokens if t in c_tokens]
 
-    # If question has high-specificity items, require overlap with them.
     if specific_terms:
         spec_hits = _has_any(all_text, specific_terms)
         strong_specific = [t for t in spec_hits if t not in ("acid", "calibration")]
         if not strong_specific:
+            if risk_tier == "CRITICAL":
+                return PolicyDecision(
+                    topic="general",
+                    allow_generation=False,
+                    mode="grounded",
+                    reason=f"[{risk_tier}] Refused: specific terms {specific_terms} not found in sources.",
+                    matched_terms=overlap,
+                    confidence="high",
+                )
+            return PolicyDecision(
+                topic="general",
+                allow_generation=True,
+                mode="advice",
+                reason=f"[{risk_tier}] Specific terms {specific_terms} not found in sources; providing general guidance only.",
+                matched_terms=overlap,
+                confidence="medium",
+            )
+
+    # overlap thresholds by tier
+    min_overlap = 2
+    if risk_tier == "LOW":
+        min_overlap = 1
+    elif risk_tier == "MEDIUM":
+        min_overlap = 2
+    elif risk_tier == "CRITICAL":
+        min_overlap = 3
+
+    if len(overlap) < min_overlap:
+        if risk_tier == "CRITICAL":
             return PolicyDecision(
                 topic="general",
                 allow_generation=False,
-                reason=f"Policy refused: specific terms {specific_terms} not found in sources.",
+                mode="grounded",
+                reason=f"[{risk_tier}] Refused: insufficient overlap between question and retrieved sources.",
                 matched_terms=overlap,
                 confidence="high",
             )
-
-    # Require at least 2 overlapping meaningful tokens to allow general answers
-    if len(overlap) < 2:
         return PolicyDecision(
             topic="general",
-            allow_generation=False,
-            reason="Policy refused: insufficient overlap between question and retrieved sources.",
+            allow_generation=True,
+            mode="advice",
+            reason=f"[{risk_tier}] Weak SOP match; providing general guidance only.",
             matched_terms=overlap,
-            confidence="high",
+            confidence="low" if risk_tier == "LOW" else "medium",
         )
 
     return PolicyDecision(
         topic="general",
         allow_generation=True,
-        reason=f"Policy gate passed: overlap terms found in sources: {overlap}",
+        mode="grounded",
+        reason=f"[{risk_tier}] Passed: overlap terms found in sources: {overlap}",
         matched_terms=overlap,
         confidence="medium",
     )

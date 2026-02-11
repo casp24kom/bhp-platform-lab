@@ -2,7 +2,7 @@ import os
 import time, uuid
 
 
-from app.policy_gate import policy_gate
+from app.policy_gate import enforce_policy, decision_to_dict
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from app.config import settings
@@ -68,14 +68,16 @@ def rag_query(req: RagRequest):
     try:
         chunks = cortex_search(req.question, req.topk)
 
-        policy = policy_gate(req.question, chunks)
+        #policy = policy_gate(req.question, chunks)
+        policy_decision = enforce_policy(req.question, chunks)
+        policy = decision_to_dict(policy_decision)
 
         # If no chunks OR policy refuses, return deterministic refusal
-        if not chunks or not policy.get("allow_generation", False):
+        if not chunks or not policy_decision.allow_generation:
             latency_ms = int((time.time() - t0) * 1000)
             refusal = (
                 "Cannot answer from approved sources. "
-                + (" " + policy.get("reason", "") if policy.get("reason") else "")
+                + (policy_decision.reason or "")
             ).strip()
             audit_rag(request_id, req.user_id, req.question, req.topk, chunks, refusal, latency_ms, policy=policy)
             return {
@@ -85,7 +87,22 @@ def rag_query(req: RagRequest):
                 "citations": chunks,
                 "latency_ms": latency_ms,
             }
-
+        
+        if policy_decision.mode == "advice":
+            latency_ms = int((time.time() - t0) * 1000)
+            msg = (
+                "General guidance only (not explicitly covered in retrieved SOP chunks). "
+                + (policy_decision.reason or "")
+            ).strip()
+            audit_rag(request_id, req.user_id, req.question, req.topk, chunks, msg, latency_ms, policy=policy)
+            return {
+                "request_id": request_id,
+                "answer": msg,
+                "policy": policy,
+                "citations": chunks,
+                "latency_ms": latency_ms,
+            }
+        
         # Allowed -> generate
         answer = generate_answer_in_snowflake(req.question, chunks)
         latency_ms = int((time.time() - t0) * 1000)
