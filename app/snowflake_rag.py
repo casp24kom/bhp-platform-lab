@@ -130,13 +130,20 @@ def _diversify_by_doc(chunks: List[Dict[str, Any]], topk: int) -> List[Dict[str,
 
     return picked
 
+def _max_risk_tier(chunks: List[Dict[str, Any]]) -> str:
+    """Highest tier wins: CRITICAL > MEDIUM > LOW."""
+    order = {"LOW": 0, "MEDIUM": 1, "CRITICAL": 2}
+    best = "LOW"
+    for c in chunks or []:
+        t = (c.get("DOC_RISK_TIER") or "LOW").upper()
+        if t not in order:
+            t = "LOW"
+        if order[t] > order[best]:
+            best = t
+    return best
 # -----------------------------
 # Public API
 # -----------------------------
-
-
-
-from typing import Any, Dict, List
 
 def cortex_search(question: str, topk: int, topic_filter: str | None = None) -> List[Dict[str, Any]]:
     cols = [
@@ -147,91 +154,183 @@ def cortex_search(question: str, topk: int, topic_filter: str | None = None) -> 
 
     base = {"@eq": {"CLASSIFICATION": "PUBLIC"}}
 
-    if topic_filter and topic_filter != "general":
-        filter_obj = {"@and": [base, {"@eq": {"DOC_TOPIC": topic_filter}}]}
+    # Pull more than topk so we can dedup/diversify locally
+    retrieve_k = min(max(topk * 10, 50), 200)
+
+    def _run(filter_obj: Dict[str, Any]) -> List[Dict[str, Any]]:
+        data = cortex_search_rest(
+            database="BHP_PLATFORM_LAB",
+            schema="KB",
+            service_name="SOP_SEARCH",
+            query=question,
+            limit=retrieve_k,
+            columns=cols,
+            filter_obj=filter_obj,
+        )
+        results = data.get("results") or data.get("data") or []
+        out = [_normalize_chunk(r) for r in results]
+        out = [c for c in out if (c.get("CHUNK_TEXT") or "").strip()]
+        out = sorted(out, key=lambda x: (x.get("SCORE") or 0), reverse=True)
+        return _dedup_chunks(out)
+
+    # -----------------------
+    # Pass 1: topic-filtered
+    # -----------------------
+    out: List[Dict[str, Any]] = []
+    topic_mode = bool(topic_filter and topic_filter != "general")
+
+    if topic_mode:
+        filter_obj_1 = {"@and": [base, {"@eq": {"DOC_TOPIC": topic_filter}}]}
+        out = _run(filter_obj_1)
     else:
-        filter_obj = base
+        out = _run(base)
 
-    data = cortex_search_rest(
-        database="BHP_PLATFORM_LAB",
-        schema="KB",
-        service_name="SOP_SEARCH",
-        query=question,
-        limit=topk,
-        columns=cols,
-        filter_obj=filter_obj,
-    )
+    # Decide whether to fall back to broader retrieval.
+    # IMPORTANT: do NOT fall back just because you have <5 unique docs —
+    # some topics legitimately only have a few SOPs (like your confined_space = 4 docs).
+    if topic_mode:
+        unique_topic_docs = {c.get("DOC_ID") for c in out if c.get("DOC_ID")}
+        # Only broaden if we basically got nothing / too little coverage
+        need_fallback = (len(out) == 0) or (len(unique_topic_docs) < 2)
+        if need_fallback:
+            out2 = _run(base)
+            out = _dedup_chunks(out + out2)
 
-    results = data.get("results") or data.get("data") or []
-    out = [_normalize_chunk(r) for r in results]
-    out = [c for c in out if (c.get("CHUNK_TEXT") or "").strip()]
-
-    if not out:
-        return []
-
-    # sort best first
-    out = sorted(out, key=lambda x: (x.get("SCORE") or 0), reverse=True)
-
-    # de-dup exact duplicates
-    out = _dedup_chunks(out)
-
-    # (optional) prefer tiers: CRITICAL > MEDIUM > LOW
+    # Prefer CRITICAL > MEDIUM > LOW
     critical = [c for c in out if (c.get("DOC_RISK_TIER") or "").upper() == "CRITICAL"]
     if critical:
-        critical = _diversify_by_doc(critical, topk)
-        return critical[:topk]
+        return _diversify_by_doc(critical, topk)[:topk]
 
     medium = [c for c in out if (c.get("DOC_RISK_TIER") or "").upper() == "MEDIUM"]
     if medium:
-        medium = _diversify_by_doc(medium, topk)
-        return medium[:topk]
+        return _diversify_by_doc(medium, topk)[:topk]
 
-    # low/general
-    out = _diversify_by_doc(out, topk)
-    return out[:topk]
-
-def _max_risk_tier(chunks: List[Dict[str, Any]]) -> str:
-    order = {"LOW": 0, "MEDIUM": 1, "CRITICAL": 2}
-    best = "LOW"
-    for c in chunks or []:
-        t = (c.get("DOC_RISK_TIER") or "LOW").upper()
-        if t not in order:
-            t = "LOW"
-        if order[t] > order[best]:
-            best = t
-    return best
-
+    return _diversify_by_doc(out, topk)[:topk]
 
 def _select_chunks_for_prompt(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Sort, dedup, then select a tier-appropriate number of chunks.
-    CRITICAL: include more evidence to reduce refusals and improve grounding.
-    """
     chunks = sorted(chunks or [], key=lambda x: (x.get("SCORE") or 0), reverse=True)
     chunks = _dedup_chunks(chunks)
 
     tier = _max_risk_tier(chunks)
+
+    # Infer dominant topic (excluding 'general')
+    topics = [
+        (c.get("DOC_TOPIC") or "").lower()
+        for c in chunks
+        if (c.get("DOC_TOPIC") or "").lower() not in ("", "general")
+    ]
+    preferred_topic: str | None = None
+    if topics:
+        preferred_topic = max(set(topics), key=topics.count)
+
+    def pick(n: int) -> List[Dict[str, Any]]:
+        # Use preferred topic pool if we have it, otherwise use full set
+        pool = chunks
+        if preferred_topic:
+            pool = [c for c in chunks if (c.get("DOC_TOPIC") or "").lower() == preferred_topic]
+            if not pool:
+                pool = chunks
+
+        # Group by DOC_ID preserving score order
+        by_doc: Dict[str, List[Dict[str, Any]]] = {}
+        for c in pool:
+            doc = str(c.get("DOC_ID") or "")
+            by_doc.setdefault(doc, []).append(c)
+
+        # Round-robin selection across docs
+        out: List[Dict[str, Any]] = []
+        while len(out) < n:
+            progressed = False
+            for doc_id in list(by_doc.keys()):
+                if by_doc[doc_id]:
+                    cand = by_doc[doc_id].pop(0)
+                    out.append(cand)
+                    progressed = True
+                    if len(out) >= n:
+                        break
+            if not progressed:
+                break
+
+        # If still short, fill from original chunks (any topic) without duplicates
+        if len(out) < n:
+            for c in chunks:
+                if c not in out:
+                    out.append(c)
+                if len(out) >= n:
+                    break
+                # Guard: if we have a preferred_topic, keep at least 70% from it (when possible)
+        if preferred_topic:
+            in_topic = [c for c in out if (c.get("DOC_TOPIC") or "").lower() == preferred_topic]
+            if len(in_topic) >= int(n * 0.7):
+                # keep as-is
+                return out[:n]
+        return out[:n]
+
     if tier == "CRITICAL":
-        return chunks[:8]   # give model more SOP evidence
+        return pick(8)
     if tier == "MEDIUM":
-        return chunks[:5]
-    return chunks[:3]
+        return pick(5)
+    return pick(3)
 
+import re
+from typing import List
 
-def _all_bullets_end_with_allowed_tag(answer: str, allowed_tags: List[str]) -> bool:
+def _bullets_fully_grounded(answer: str, allowed_tags: List[str]) -> bool:
     """
-    Stronger deterministic enforcement:
-    - For each bullet line starting with '-', require it ends with one allowed tag.
+    Robust grounding check.
+
+    Accepts bullets that:
+    - start with '-', '*', '•', or '1.' / '1)' numbering
+    - may wrap onto following lines
+    - must have the final non-empty line of each bullet end with an allowed tag
+      (optionally followed by trailing punctuation like '.' or ')')
+
+    This prevents false failures due to formatting differences.
     """
-    if not answer:
+    if not answer or not allowed_tags:
         return False
-    lines = [ln.strip() for ln in answer.splitlines() if ln.strip()]
-    bullets = [ln for ln in lines if ln.startswith("-")]
+
+    # Normalize line endings
+    lines = [ln.rstrip() for ln in answer.splitlines()]
+
+    # Build bullet blocks (a bullet can span multiple lines)
+    bullet_starts = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
+    bullets: List[List[str]] = []
+    current: List[str] = []
+
+    for ln in lines:
+        if not ln.strip():
+            continue
+
+        if bullet_starts.match(ln):
+            # start a new bullet
+            if current:
+                bullets.append(current)
+            current = [ln.strip()]
+        else:
+            # continuation line
+            if current:
+                current.append(ln.strip())
+            else:
+                # text before first bullet -> ignore
+                continue
+
+    if current:
+        bullets.append(current)
+
     if not bullets:
         return False
+
+    # A regex that matches: ...<allowed_tag><optional trailing punctuation>
+    # We escape tags to avoid regex metachar issues.
+    tag_patterns = [re.escape(t) for t in allowed_tags]
+    tag_re = re.compile(rf"(?:{'|'.join(tag_patterns)})(?:[).,;:]?)\s*$")
+
     for b in bullets:
-        if not any(b.endswith(tag) for tag in allowed_tags):
+        last_line = b[-1]
+        if not tag_re.search(last_line):
             return False
+
     return True
 
 
@@ -245,19 +344,20 @@ def generate_answer_in_snowflake(question: str, chunks: List[Dict[str, Any]]) ->
     risk_tier = _max_risk_tier(chunks_for_prompt)
 
     prompt = (
-        "You are an operational mining SOP assistant.\n"
-        "Hard rules:\n"
-        "1) Use ONLY the SOURCES below.\n"
-        "2) Every bullet MUST end with a citation tag exactly as shown in SOURCES.\n"
-        "3) If SOURCES are insufficient, reply exactly: CANNOT_ANSWER_FROM_SOURCES\n"
-        "4) Do not add generic advice beyond SOURCES.\n\n"
-        f"RISK_TIER: {risk_tier}\n\n"
-        f"QUESTION:\n{question}\n\n"
-        f"SOURCES:\n{sources_block}\n\n"
-        "OUTPUT FORMAT:\n"
-        "- Bullet list of controls/steps.\n"
-        "- Each bullet ends with one citation tag.\n"
-    )
+    "You are an operational mining SOP assistant.\n"
+    "Hard rules (the output is automatically rejected if you break these):\n"
+    "1) Use ONLY the SOURCES below.\n"
+    "2) Write ONLY '-' bullet points (no numbering).\n"
+    "3) Every bullet MUST end with exactly ONE citation tag exactly as shown in SOURCES.\n"
+    "4) Do NOT put anything after the citation tag (no extra words).\n"
+    "5) If SOURCES are insufficient, reply exactly: CANNOT_ANSWER_FROM_SOURCES\n\n"
+    "Example format (use the real tags from SOURCES):\n"
+    "- Do the thing. [DOC_ID|DOC_NAME#chunkN]\n\n"
+    f"RISK_TIER: {risk_tier}\n\n"
+    f"QUESTION:\n{question}\n\n"
+    f"SOURCES:\n{sources_block}\n\n"
+    "OUTPUT:\n"
+)
 
     sql = "SELECT AI_COMPLETE(%s, %s) AS answer"
 
@@ -272,8 +372,8 @@ def generate_answer_in_snowflake(question: str, chunks: List[Dict[str, Any]]) ->
     if ans.strip() == "CANNOT_ANSWER_FROM_SOURCES":
         return "Cannot answer from approved sources."
 
-    # Strong enforcement: EVERY bullet must end with an allowed tag.
-    if not _all_bullets_end_with_allowed_tag(ans, allowed_tags):
+    # Strong enforcement: every bullet block must end with an allowed tag (robust to formatting)
+    if not _bullets_fully_grounded(ans, allowed_tags):
         return "Cannot answer from approved sources. (Model did not provide fully grounded citations.)"
 
     ans = re.sub(r"\n+Sources:\n.*$", "", ans, flags=re.IGNORECASE | re.DOTALL).strip()
