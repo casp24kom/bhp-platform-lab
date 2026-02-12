@@ -1,7 +1,9 @@
 import os
 import time, uuid
 
-from fastapi.responses import FileResponse
+from typing import Optional, Literal
+from fastapi.responses import FileResponse, RedirectResponse
+from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 from app.policy_gate import enforce_policy, decision_to_dict, _topic_from_question
 from fastapi import FastAPI, HTTPException
@@ -15,11 +17,17 @@ from app.snowflake_audit import audit_dq
 
 app = FastAPI(title="Data & AI Platform Lab", version="1.0")
 
+
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-@app.get("/")
+# ---- UI handling: serve static index if present, else redirect to /docs
+@app.get("/", include_in_schema=False)
 def root():
-    return FileResponse("app/static/index.html")
+    # adjust if your static path differs
+    index_path = Path(__file__).resolve().parent / "static" / "index.html"
+    if index_path.exists():
+        return FileResponse(str(index_path))
+    return RedirectResponse(url="/docs")
 
 
 @app.post("/debug/ai")
@@ -55,10 +63,20 @@ def debug_sql():
     a, r, v = row
     return {"account": a, "region": r, "version": v}
 
+AllowedTopic = Literal[
+    "general",
+    "isolation_loto",
+    "confined_space",
+    "hot_work",
+    "working_at_heights",
+    "ppe",
+]
+
 class RagRequest(BaseModel):
     user_id: str = "demo"
     question: str
     topk: int = 5
+    topic: Optional[AllowedTopic] = None  # NEW (optional override)
 
 class DqRequest(BaseModel):
     user_id: str = "demo"
@@ -74,10 +92,13 @@ def rag_query(req: RagRequest):
     request_id = str(uuid.uuid4())
     t0 = time.time()
     try:
-        topic = _topic_from_question(req.question)
+        topic = (req.topic or _topic_from_question(req.question) or "general")
+
+        # retrieval filtered by topic
         chunks = cortex_search(req.question, req.topk, topic_filter=topic)
 
-        policy_decision = enforce_policy(req.question, chunks)
+        # NEW: policy uses same topic
+        policy_decision = enforce_policy(req.question, chunks, topic_override=topic)
         policy = decision_to_dict(policy_decision)
 
         def _filter_chunks_for_generation(chs):

@@ -141,8 +141,8 @@ def _doc_risk_tier(chunks: List[Dict]) -> str:
     return best
 
 
-def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
-    topic = _topic_from_question(question)
+def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None = None) -> PolicyDecision:
+    topic = topic_override or _topic_from_question(question) or "general"
 
     if not chunks:
         return PolicyDecision(

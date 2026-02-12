@@ -20,7 +20,7 @@
       max-width: 1100px;
       margin: 0 auto;
       padding: 18px;
-      padding-bottom: 88px; /* room for mobile sticky bar */
+      padding-bottom: 96px; /* room for mobile sticky bar */
     }
 
     .header{
@@ -55,29 +55,27 @@
     }
 
     label{ color: var(--muted); font-size: 13px; }
-
-    textarea{
+    select, textarea, input{
       width:100%;
       background:#0c121c;
       color:var(--text);
       border:1px solid var(--line);
       border-radius:12px;
       padding:12px;
-      font-size:16px; /* 16px prevents iOS zoom */
-      resize:vertical;
-      min-height: 120px;
+      font-size:16px; /* prevent iOS zoom */
       line-height:1.35;
     }
-
-    input{
-      background:#0c121c;
-      color:var(--text);
-      border:1px solid var(--line);
-      border-radius:10px;
-      padding:10px 10px;
+    input, select{
       font-size:14px;
+      padding:10px 10px;
+      border-radius:10px;
     }
-    input[type="checkbox"]{ transform: scale(1.2); }
+    input[type="checkbox"]{ transform: scale(1.2); width:auto; }
+
+    textarea{
+      resize:vertical;
+      min-height: 120px;
+    }
 
     button{
       background:var(--btn);
@@ -88,8 +86,12 @@
       cursor:pointer;
       font-weight:700;
       font-size:14px;
-      min-height:44px; /* mobile tap target */
+      min-height:44px;
       -webkit-tap-highlight-color: transparent;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:8px;
     }
     button:disabled{ opacity:0.6; cursor:not-allowed; }
 
@@ -109,6 +111,8 @@
       margin-top: 10px;
     }
     .row.tight{ margin-top: 6px; }
+    .row > * { flex: 0 0 auto; }
+    .row .grow { flex: 1 1 auto; min-width: 220px; }
 
     .pill{
       display:inline-flex; align-items:center; gap:8px;
@@ -169,6 +173,39 @@
     .kv{ font-size: 12px; color: var(--muted); }
     .kv b{ color: var(--text); font-weight:700; }
 
+    details{
+      background:#0c121c;
+      border:1px solid var(--line);
+      border-radius:12px;
+      padding:10px;
+      margin-top:10px;
+    }
+    summary{
+      cursor:pointer;
+      color: var(--text);
+      font-weight:700;
+      list-style:none;
+    }
+    summary::-webkit-details-marker{ display:none; }
+    .summary-sub{
+      color: var(--muted);
+      font-weight:500;
+      font-size:12px;
+      margin-left:6px;
+    }
+
+    /* Spinner */
+    .spinner{
+      width:16px; height:16px;
+      border:2px solid rgba(255,255,255,0.25);
+      border-top:2px solid rgba(255,255,255,0.95);
+      border-radius:999px;
+      animation: spin 0.9s linear infinite;
+      display:none;
+    }
+    .loading .spinner{ display:inline-block; }
+    @keyframes spin{ to { transform: rotate(360deg); } }
+
     /* Mobile sticky bottom bar */
     .mobile-bar{
       position: fixed;
@@ -198,10 +235,8 @@
       width: 76px;
       padding:10px;
     }
-
     @media (max-width: 980px){
       .mobile-bar{ display:block; }
-      /* keep desktop ask row visible too, but this improves usability on phones */
     }
   </style>
 </head>
@@ -216,7 +251,7 @@
           It will refuse if the question is not supported by retrieved SOP content.
         </p>
         <p class="small">
-          Tip: be specific (e.g., “lockout/tagout procedure”, “confined space entry permit steps”, “hot work fire watch controls”).
+          Shortcut: <b>Ctrl+Enter</b> / <b>⌘+Enter</b> to send.
         </p>
       </div>
       <div class="links">
@@ -231,14 +266,33 @@
       <div class="card">
         <div class="row" style="justify-content:space-between;">
           <div class="pill" id="statusPill"><span class="dot" id="statusDot"></span><span id="statusText">Checking service…</span></div>
+
           <div class="row">
             <label>topk</label>
             <input id="topk" type="number" min="1" max="10" value="3" />
-            <button id="askBtn" onclick="ask()">Ask</button>
+            <button id="askBtn" onclick="ask(false)">
+              <span class="spinner" id="spinDesktop"></span>
+              Ask
+            </button>
           </div>
         </div>
 
-        <label style="display:block; margin-top:12px;">Question</label>
+        <!-- Suggested topics dropdown -->
+        <div class="row">
+          <div class="grow">
+            <label style="display:block; margin-top:12px;">Suggested topics</label>
+            <select id="topicSelect" onchange="applyTopicTemplate()">
+              <option value="">(pick a template…)</option>
+              <option value="isolation_loto">isolation_loto – lockout/tagout</option>
+              <option value="confined_space">confined_space – entry permit & standby</option>
+              <option value="hot_work">hot_work – hot work permit & fire watch</option>
+              <option value="working_at_heights">working_at_heights – harness/lanyard/scaffold</option>
+              <option value="ppe">ppe – PPE requirements</option>
+            </select>
+          </div>
+        </div>
+
+        <label style="display:block; margin-top:10px;">Question</label>
         <textarea id="q" placeholder="Type your SOP question here…"></textarea>
 
         <div class="examples">
@@ -250,10 +304,19 @@
         </div>
 
         <div class="row">
-          <label>User ID</label>
-          <input id="userId" value="demo" />
-          <label>Show raw JSON</label>
-          <input id="raw" type="checkbox" />
+          <div>
+            <label>User ID</label><br/>
+            <input id="userId" value="demo" />
+          </div>
+
+          <div class="pill">
+            <label style="margin:0;">Show raw JSON</label>
+            <input id="raw" type="checkbox" />
+          </div>
+
+          <button class="btn-secondary" id="copyBtn" onclick="copyAnswer()" title="Copy answer to clipboard" disabled>
+            Copy answer
+          </button>
         </div>
 
         <h3 style="margin:14px 0 6px 0;">Answer</h3>
@@ -268,8 +331,14 @@
             <div class="kv" style="grid-column:1/-1;"><b>Policy reason</b>: <span id="mReason"></span></div>
           </div>
 
-          <h3 style="margin:14px 0 6px 0;">Citations (top matches)</h3>
-          <div id="cites"></div>
+          <!-- Collapsible citations -->
+          <details id="citationsDetails" open>
+            <summary>
+              Citations (top matches)
+              <span class="summary-sub" id="citeCount"></span>
+            </summary>
+            <div id="cites"></div>
+          </details>
         </div>
       </div>
 
@@ -285,6 +354,7 @@
         <ul class="muted" style="line-height:1.6;">
           <li>Use specific terms: “lockout/tagout”, “entry permit”, “fire watch”, “harness/lanyard”.</li>
           <li>Ask 1 topic at a time (short and focused).</li>
+          <li>Use the “Suggested topics” templates to start.</li>
         </ul>
 
         <h3>Why you might see a refusal</h3>
@@ -310,18 +380,44 @@
         <span>topk</span>
         <input id="topkMobile" type="number" min="1" max="10" value="3" />
       </div>
-      <button id="askBtnMobile" onclick="ask(true)">Ask</button>
+      <button id="askBtnMobile" onclick="ask(true)">
+        <span class="spinner" id="spinMobile"></span>
+        Ask
+      </button>
     </div>
   </div>
 
 <script>
+  let lastAnswerText = "";
+  let lastJson = null;
+
+  const templates = {
+    isolation_loto:
+      "What is the lockout tagout (LOTO) procedure before maintenance?",
+    confined_space:
+      "What are the steps for confined space entry, including entry permit and standby requirements?",
+    hot_work:
+      "What are the hot work permit controls and fire watch requirements before starting welding/cutting/grinding?",
+    working_at_heights:
+      "What are the working at heights controls (harness/lanyard, anchors, scaffold/EWP) required before starting work?",
+    ppe:
+      "What PPE is required for grinding and cutting tasks, and what minimum controls apply?"
+  };
+
   function setQ(t){ document.getElementById("q").value = t; }
+
+  function applyTopicTemplate(){
+    const sel = document.getElementById("topicSelect").value;
+    if(!sel) return;
+    setQ(templates[sel] || "");
+    // keep focus on textarea for quick typing
+    document.getElementById("q").focus();
+  }
 
   function setStatus(state, text){
     const dot = document.getElementById("statusDot");
     dot.className = "dot " + (state || "");
     document.getElementById("statusText").textContent = text;
-
     const mini = document.getElementById("mStatusMini");
     if(mini) mini.textContent = text;
   }
@@ -340,46 +436,66 @@
   function renderCitations(citations){
     const wrap = document.getElementById("cites");
     wrap.innerHTML = "";
-    if(!citations || !citations.length){
+    const count = document.getElementById("citeCount");
+    const n = (citations && citations.length) ? citations.length : 0;
+    count.textContent = n ? `(${n})` : "(0)";
+
+    if(!n){
       wrap.innerHTML = '<div class="muted">No citations returned.</div>';
       return;
     }
     citations.forEach(c => {
       const div = document.createElement("div");
       div.className = "cite-item";
+      const txt = (c.CHUNK_TEXT || "").replaceAll("<","&lt;");
       div.innerHTML = `
         <div><b>${c.DOC_ID || ""}</b> – ${c.DOC_NAME || ""}</div>
         <div class="small">Topic: ${c.DOC_TOPIC || "n/a"} · Tier: ${c.DOC_RISK_TIER || "n/a"} · Score: ${c.SCORE ?? "n/a"}</div>
-        <div style="margin-top:8px;" class="muted">${(c.CHUNK_TEXT || "").replaceAll("<","&lt;")}</div>
+        <div style="margin-top:8px;" class="muted">${txt}</div>
       `;
       wrap.appendChild(div);
     });
   }
 
+  function setLoading(isLoading){
+    const btn = document.getElementById("askBtn");
+    const btnM = document.getElementById("askBtnMobile");
+    btn.disabled = isLoading;
+    btnM.disabled = isLoading;
+
+    btn.classList.toggle("loading", isLoading);
+    btnM.classList.toggle("loading", isLoading);
+
+    // spinner visibility is handled by .loading class
+  }
+
   async function ask(fromMobile){
     // sync topk between desktop + mobile
+    const topic = document.getElementById("topicSelect").value || null;
     const topkDesktop = document.getElementById("topk");
     const topkMobile = document.getElementById("topkMobile");
     const chosenTopk = parseInt((fromMobile ? topkMobile.value : topkDesktop.value) || "3", 10);
     topkDesktop.value = chosenTopk;
     topkMobile.value = chosenTopk;
 
-    const btn = document.getElementById("askBtn");
-    const btnM = document.getElementById("askBtnMobile");
-    btn.disabled = true; btnM.disabled = true;
-
     const q = document.getElementById("q").value.trim();
     const user_id = document.getElementById("userId").value || "demo";
     const raw = document.getElementById("raw").checked;
 
+    document.getElementById("copyBtn").disabled = true;
+    lastAnswerText = "";
+    lastJson = null;
+
     document.getElementById("answerBox").textContent = "Thinking…";
     document.getElementById("meta").style.display = "none";
+
+    setLoading(true);
 
     try{
       const r = await fetch("/rag/query", {
         method:"POST",
         headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({user_id, question:q, topk: chosenTopk})
+        body: JSON.stringify({user_id,question: q,topk: chosenTopk,topic: topic})
       });
 
       const text = await r.text();
@@ -387,31 +503,75 @@
       try { j = JSON.parse(text); } catch { /* ignore */ }
 
       if(!r.ok){
-        document.getElementById("answerBox").textContent = raw ? text : (j?.detail || "Request failed");
+        const msg = raw ? text : (j?.detail || "Request failed");
+        document.getElementById("answerBox").textContent = msg;
+        lastAnswerText = msg;
+        document.getElementById("copyBtn").disabled = false;
         return;
       }
 
-      document.getElementById("answerBox").textContent = raw ? JSON.stringify(j, null, 2) : (j.answer || "(no answer)");
+      lastJson = j;
+      const answerText = raw ? JSON.stringify(j, null, 2) : (j.answer || "(no answer)");
+      document.getElementById("answerBox").textContent = answerText;
+      lastAnswerText = answerText;
 
       document.getElementById("mTopic").textContent = j.policy?.topic || "n/a";
       document.getElementById("mRisk").textContent = j.policy?.risk_tier || "n/a";
       document.getElementById("mMode").textContent = j.policy?.mode || "n/a";
       document.getElementById("mReason").textContent = j.policy?.reason || "n/a";
       document.getElementById("mLatency").textContent = j.latency_ms ?? "n/a";
-      document.getElementById("meta").style.display = "block";
 
+      document.getElementById("meta").style.display = "block";
       renderCitations(j.citations || []);
+
+      // auto-collapse citations on small screens (still user-expandable)
+      const isSmall = window.matchMedia("(max-width: 680px)").matches;
+      document.getElementById("citationsDetails").open = !isSmall;
+
+      document.getElementById("copyBtn").disabled = false;
+
       // On mobile, scroll to answer after asking
       document.getElementById("answerBox").scrollIntoView({behavior:"smooth", block:"start"});
     } catch(e){
-      document.getElementById("answerBox").textContent = "Error: " + e.message;
+      const msg = "Error: " + e.message;
+      document.getElementById("answerBox").textContent = msg;
+      lastAnswerText = msg;
+      document.getElementById("copyBtn").disabled = false;
     } finally {
-      btn.disabled = false; btnM.disabled = false;
+      setLoading(false);
     }
   }
 
+  async function copyAnswer(){
+    try{
+      await navigator.clipboard.writeText(lastAnswerText || "");
+      const btn = document.getElementById("copyBtn");
+      const old = btn.textContent;
+      btn.textContent = "Copied!";
+      setTimeout(() => btn.textContent = old, 900);
+    }catch(e){
+      // fallback for older browsers
+      const ta = document.createElement("textarea");
+      ta.value = lastAnswerText || "";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+  }
+
+  // Ctrl+Enter / Cmd+Enter to send
+  document.addEventListener("keydown", (ev) => {
+    const isMac = navigator.platform.toUpperCase().includes("MAC");
+    const sendCombo = (isMac && ev.metaKey && ev.key === "Enter") || (!isMac && ev.ctrlKey && ev.key === "Enter");
+    if(sendCombo){
+      ev.preventDefault();
+      ask(false);
+    }
+  });
+
   // defaults
-  setQ("What is the lockout tagout procedure before maintenance?");
+  setQ(templates.isolation_loto);
   healthCheck();
 </script>
 </body>
