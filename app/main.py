@@ -1,7 +1,8 @@
 import os
 import time, uuid
 
-
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from app.policy_gate import enforce_policy, decision_to_dict, _topic_from_question
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -13,6 +14,12 @@ from app.agentcore_client import call_agentcore
 from app.snowflake_audit import audit_dq
 
 app = FastAPI(title="Data & AI Platform Lab", version="1.0")
+
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+@app.get("/")
+def root():
+    return FileResponse("app/static/index.html")
 
 
 @app.post("/debug/ai")

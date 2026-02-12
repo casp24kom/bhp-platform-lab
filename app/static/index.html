@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>BHP Platform Lab – SOP Q&A</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --card:#101826; --text:#e6edf3; --muted:#9fb0c0;
+      --ok:#1bd96a; --warn:#ffcc00; --bad:#ff5c5c; --line:#1f2a3a;
+      --btn:#1e90ff; --btn2:#17253a;
+    }
+    * { box-sizing: border-box; }
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      background:var(--bg); color:var(--text);
+    }
+    .wrap{
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 18px;
+      padding-bottom: 88px; /* room for mobile sticky bar */
+    }
+
+    .header{
+      display:flex;
+      gap:14px;
+      align-items:flex-start;
+      justify-content:space-between;
+      flex-wrap:wrap;
+    }
+    .title{ font-size: 22px; margin:0 0 6px 0; line-height:1.2; }
+    .subtitle{ margin:0; color:var(--muted); line-height:1.45; }
+    .small{ font-size: 12px; color: var(--muted); margin: 10px 0 0 0; }
+    .links{ display:flex; gap:10px; flex-wrap:wrap; }
+    .links a{ color: var(--muted); text-decoration:none; }
+    .links a:hover{ color: var(--text); }
+
+    .grid{
+      display:grid;
+      grid-template-columns: 1.35fr 0.65fr;
+      gap:14px;
+      margin-top:14px;
+    }
+    @media (max-width: 980px){
+      .grid{ grid-template-columns: 1fr; }
+    }
+
+    .card{
+      background:var(--card);
+      border:1px solid var(--line);
+      border-radius:14px;
+      padding:14px;
+    }
+
+    label{ color: var(--muted); font-size: 13px; }
+
+    textarea{
+      width:100%;
+      background:#0c121c;
+      color:var(--text);
+      border:1px solid var(--line);
+      border-radius:12px;
+      padding:12px;
+      font-size:16px; /* 16px prevents iOS zoom */
+      resize:vertical;
+      min-height: 120px;
+      line-height:1.35;
+    }
+
+    input{
+      background:#0c121c;
+      color:var(--text);
+      border:1px solid var(--line);
+      border-radius:10px;
+      padding:10px 10px;
+      font-size:14px;
+    }
+    input[type="checkbox"]{ transform: scale(1.2); }
+
+    button{
+      background:var(--btn);
+      color:white;
+      border:none;
+      border-radius:12px;
+      padding:12px 14px;
+      cursor:pointer;
+      font-weight:700;
+      font-size:14px;
+      min-height:44px; /* mobile tap target */
+      -webkit-tap-highlight-color: transparent;
+    }
+    button:disabled{ opacity:0.6; cursor:not-allowed; }
+
+    .btn-secondary{
+      background:var(--btn2);
+      border:1px solid var(--line);
+      color:var(--text);
+      font-weight:600;
+    }
+    .btn-secondary:hover{ filter: brightness(1.08); }
+
+    .row{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      flex-wrap:wrap;
+      margin-top: 10px;
+    }
+    .row.tight{ margin-top: 6px; }
+
+    .pill{
+      display:inline-flex; align-items:center; gap:8px;
+      padding:8px 10px;
+      border-radius:999px;
+      border:1px solid var(--line);
+      background:#0c121c;
+      color: var(--muted);
+      font-size: 12px;
+      min-height: 40px;
+    }
+    .dot{ width:10px; height:10px; border-radius:999px; background: var(--muted); display:inline-block; }
+    .dot.ok{ background: var(--ok); }
+    .dot.warn{ background: var(--warn); }
+    .dot.bad{ background: var(--bad); }
+
+    pre{
+      white-space: pre-wrap;
+      word-break: break-word;
+      background:#0c121c;
+      border:1px solid var(--line);
+      border-radius:12px;
+      padding:12px;
+      overflow:auto;
+      margin: 10px 0 0 0;
+      font-size: 14px;
+      line-height:1.45;
+    }
+
+    .examples{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      margin-top:10px;
+    }
+    .examples .muted{ color:var(--muted); font-size:13px; margin-right:4px; }
+    .examples button{
+      padding:10px 12px;
+      border-radius:999px;
+    }
+
+    .cite{ border-top:1px solid var(--line); margin-top:12px; padding-top:12px; }
+    .cite-item{
+      padding:10px;
+      border:1px solid var(--line);
+      border-radius:12px;
+      background:#0c121c;
+      margin-top:10px;
+    }
+    .kvs{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap:10px;
+    }
+    @media (max-width: 680px){
+      .kvs{ grid-template-columns: 1fr; }
+    }
+    .kv{ font-size: 12px; color: var(--muted); }
+    .kv b{ color: var(--text); font-weight:700; }
+
+    /* Mobile sticky bottom bar */
+    .mobile-bar{
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+      background: rgba(11, 15, 20, 0.92);
+      border-top: 1px solid var(--line);
+      backdrop-filter: blur(10px);
+      display: none;
+      z-index: 99;
+    }
+    .mobile-bar-inner{
+      max-width: 1100px;
+      margin: 0 auto;
+      display:flex;
+      gap:10px;
+      align-items:center;
+      justify-content:space-between;
+      flex-wrap:wrap;
+    }
+    .mobile-bar .left{
+      display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .mobile-bar input{
+      width: 76px;
+      padding:10px;
+    }
+
+    @media (max-width: 980px){
+      .mobile-bar{ display:block; }
+      /* keep desktop ask row visible too, but this improves usability on phones */
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div>
+        <h1 class="title">BHP Platform Lab – SOP Q&A (RAG + Policy Gate)</h1>
+        <p class="subtitle">
+          Ask a question and the service answers <b>only</b> using retrieved SOP snippets (“approved sources”).
+          It will refuse if the question is not supported by retrieved SOP content.
+        </p>
+        <p class="small">
+          Tip: be specific (e.g., “lockout/tagout procedure”, “confined space entry permit steps”, “hot work fire watch controls”).
+        </p>
+      </div>
+      <div class="links">
+        <a href="/docs" target="_blank">Swagger</a>
+        <a href="/redoc" target="_blank">ReDoc</a>
+        <a href="/health" target="_blank">Health</a>
+        <a href="/debug/sql" target="_blank">Snowflake SQL</a>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;">
+          <div class="pill" id="statusPill"><span class="dot" id="statusDot"></span><span id="statusText">Checking service…</span></div>
+          <div class="row">
+            <label>topk</label>
+            <input id="topk" type="number" min="1" max="10" value="3" />
+            <button id="askBtn" onclick="ask()">Ask</button>
+          </div>
+        </div>
+
+        <label style="display:block; margin-top:12px;">Question</label>
+        <textarea id="q" placeholder="Type your SOP question here…"></textarea>
+
+        <div class="examples">
+          <span class="muted">Examples:</span>
+          <button class="btn-secondary" onclick="setQ('What is the lockout tagout procedure before maintenance?')">LOTO before maintenance</button>
+          <button class="btn-secondary" onclick="setQ('What are the steps for confined space entry and standby requirements?')">Confined space</button>
+          <button class="btn-secondary" onclick="setQ('What are the hot work permit controls and fire watch requirements?')">Hot work</button>
+          <button class="btn-secondary" onclick="setQ('What PPE is required for grinding and cutting tasks?')">PPE</button>
+        </div>
+
+        <div class="row">
+          <label>User ID</label>
+          <input id="userId" value="demo" />
+          <label>Show raw JSON</label>
+          <input id="raw" type="checkbox" />
+        </div>
+
+        <h3 style="margin:14px 0 6px 0;">Answer</h3>
+        <pre id="answerBox" class="muted">(ask a question)</pre>
+
+        <div id="meta" class="cite" style="display:none;">
+          <div class="kvs">
+            <div class="kv"><b>Topic</b>: <span id="mTopic"></span></div>
+            <div class="kv"><b>Risk tier</b>: <span id="mRisk"></span></div>
+            <div class="kv"><b>Mode</b>: <span id="mMode"></span></div>
+            <div class="kv"><b>Latency</b>: <span id="mLatency"></span> ms</div>
+            <div class="kv" style="grid-column:1/-1;"><b>Policy reason</b>: <span id="mReason"></span></div>
+          </div>
+
+          <h3 style="margin:14px 0 6px 0;">Citations (top matches)</h3>
+          <div id="cites"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0;">What this demo does</h3>
+        <ul class="muted" style="line-height:1.6;">
+          <li><b>Retrieval</b>: searches a Cortex Search index for SOP chunks.</li>
+          <li><b>Policy gate</b>: enforces grounding rules and refuses weak matches.</li>
+          <li><b>Answering</b>: returns bullet answers that end with citation tags.</li>
+        </ul>
+
+        <h3>What questions work best</h3>
+        <ul class="muted" style="line-height:1.6;">
+          <li>Use specific terms: “lockout/tagout”, “entry permit”, “fire watch”, “harness/lanyard”.</li>
+          <li>Ask 1 topic at a time (short and focused).</li>
+        </ul>
+
+        <h3>Why you might see a refusal</h3>
+        <ul class="muted" style="line-height:1.6;">
+          <li>The SOP chunks don’t explicitly cover the question.</li>
+          <li>The question is too generic without clear SOP evidence.</li>
+          <li>Grounding requirements weren’t met (coverage/tags).</li>
+        </ul>
+
+        <div class="small" style="margin-top:12px; border-top:1px solid var(--line); padding-top:12px;">
+          Demo environment using synthetic SOP content.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile sticky bar -->
+  <div class="mobile-bar">
+    <div class="mobile-bar-inner">
+      <div class="left">
+        <span id="mStatusMini">Ready</span>
+        <span>·</span>
+        <span>topk</span>
+        <input id="topkMobile" type="number" min="1" max="10" value="3" />
+      </div>
+      <button id="askBtnMobile" onclick="ask(true)">Ask</button>
+    </div>
+  </div>
+
+<script>
+  function setQ(t){ document.getElementById("q").value = t; }
+
+  function setStatus(state, text){
+    const dot = document.getElementById("statusDot");
+    dot.className = "dot " + (state || "");
+    document.getElementById("statusText").textContent = text;
+
+    const mini = document.getElementById("mStatusMini");
+    if(mini) mini.textContent = text;
+  }
+
+  async function healthCheck(){
+    try{
+      const r = await fetch("/health", {cache:"no-store"});
+      if(!r.ok) throw new Error("health not ok");
+      const j = await r.json();
+      setStatus("ok", "Service healthy (" + (j.env || "unknown") + ")");
+    }catch(e){
+      setStatus("bad", "Service not reachable");
+    }
+  }
+
+  function renderCitations(citations){
+    const wrap = document.getElementById("cites");
+    wrap.innerHTML = "";
+    if(!citations || !citations.length){
+      wrap.innerHTML = '<div class="muted">No citations returned.</div>';
+      return;
+    }
+    citations.forEach(c => {
+      const div = document.createElement("div");
+      div.className = "cite-item";
+      div.innerHTML = `
+        <div><b>${c.DOC_ID || ""}</b> – ${c.DOC_NAME || ""}</div>
+        <div class="small">Topic: ${c.DOC_TOPIC || "n/a"} · Tier: ${c.DOC_RISK_TIER || "n/a"} · Score: ${c.SCORE ?? "n/a"}</div>
+        <div style="margin-top:8px;" class="muted">${(c.CHUNK_TEXT || "").replaceAll("<","&lt;")}</div>
+      `;
+      wrap.appendChild(div);
+    });
+  }
+
+  async function ask(fromMobile){
+    // sync topk between desktop + mobile
+    const topkDesktop = document.getElementById("topk");
+    const topkMobile = document.getElementById("topkMobile");
+    const chosenTopk = parseInt((fromMobile ? topkMobile.value : topkDesktop.value) || "3", 10);
+    topkDesktop.value = chosenTopk;
+    topkMobile.value = chosenTopk;
+
+    const btn = document.getElementById("askBtn");
+    const btnM = document.getElementById("askBtnMobile");
+    btn.disabled = true; btnM.disabled = true;
+
+    const q = document.getElementById("q").value.trim();
+    const user_id = document.getElementById("userId").value || "demo";
+    const raw = document.getElementById("raw").checked;
+
+    document.getElementById("answerBox").textContent = "Thinking…";
+    document.getElementById("meta").style.display = "none";
+
+    try{
+      const r = await fetch("/rag/query", {
+        method:"POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({user_id, question:q, topk: chosenTopk})
+      });
+
+      const text = await r.text();
+      let j = null;
+      try { j = JSON.parse(text); } catch { /* ignore */ }
+
+      if(!r.ok){
+        document.getElementById("answerBox").textContent = raw ? text : (j?.detail || "Request failed");
+        return;
+      }
+
+      document.getElementById("answerBox").textContent = raw ? JSON.stringify(j, null, 2) : (j.answer || "(no answer)");
+
+      document.getElementById("mTopic").textContent = j.policy?.topic || "n/a";
+      document.getElementById("mRisk").textContent = j.policy?.risk_tier || "n/a";
+      document.getElementById("mMode").textContent = j.policy?.mode || "n/a";
+      document.getElementById("mReason").textContent = j.policy?.reason || "n/a";
+      document.getElementById("mLatency").textContent = j.latency_ms ?? "n/a";
+      document.getElementById("meta").style.display = "block";
+
+      renderCitations(j.citations || []);
+      // On mobile, scroll to answer after asking
+      document.getElementById("answerBox").scrollIntoView({behavior:"smooth", block:"start"});
+    } catch(e){
+      document.getElementById("answerBox").textContent = "Error: " + e.message;
+    } finally {
+      btn.disabled = false; btnM.disabled = false;
+    }
+  }
+
+  // defaults
+  setQ("What is the lockout tagout procedure before maintenance?");
+  healthCheck();
+</script>
+</body>
+</html>
