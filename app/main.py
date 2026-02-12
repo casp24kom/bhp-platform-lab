@@ -111,6 +111,13 @@ def rag_query(req: RagRequest):
 
         # Grounded mode -> generate using tier-filtered chunks
         answer = generate_answer_in_snowflake(req.question, gen_chunks)
+        if answer.strip().lower().startswith("cannot answer from approved sources"):
+            bullets = []
+            for c in gen_chunks[:3]:
+                txt = (c.get("CHUNK_TEXT") or "").strip()
+                if txt:
+                    bullets.append(f"- {txt} [{c.get('DOC_ID')}|{c.get('DOC_NAME')}#chunk{c.get('CHUNK_ID')}]")
+            answer = "\n".join(bullets) if bullets else answer
         latency_ms = int((time.time() - t0) * 1000)
         audit_rag(request_id, req.user_id, req.question, req.topk, gen_chunks, answer, latency_ms, policy=policy)
 

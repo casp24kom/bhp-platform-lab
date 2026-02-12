@@ -354,8 +354,13 @@ def generate_answer_in_snowflake(question: str, chunks: List[Dict[str, Any]]) ->
     sources_block, allowed_tags = _build_sources(chunks_for_prompt)
     risk_tier = _max_risk_tier(chunks_for_prompt)
 
-    min_bullets = 8 if risk_tier == "CRITICAL" else (5 if risk_tier == "MEDIUM" else 3)
+    #min_bullets = 8 if risk_tier == "CRITICAL" else (5 if risk_tier == "MEDIUM" else 3)
+    base = 8 if risk_tier == "CRITICAL" else (5 if risk_tier == "MEDIUM" else 3)
 
+    # practical cap: I can usually get ~2 bullets per chunk reliably
+    cap = max(3, len(chunks_for_prompt) * 2)
+
+    min_bullets = min(base, cap)
     # Practical uniqueness target (don’t make it impossible)
     min_unique_tags = min(len(allowed_tags), max(2, min_bullets // 2))
 
@@ -427,7 +432,17 @@ def generate_answer_in_snowflake(question: str, chunks: List[Dict[str, Any]]) ->
 
     if _passes(ans2):
         return ans2
+    def _extractive_fallback() -> str:
+        lines = []
+        for c in chunks_for_prompt[:3]:
+            txt = (c.get("CHUNK_TEXT") or "").strip().rstrip(".")
+            tag = f"[{c.get('DOC_ID')}|{c.get('DOC_NAME')}#chunk{c.get('CHUNK_ID')}]"
+            if txt:
+                lines.append(f"- {txt} {tag}")
+        return "\n".join(lines) if lines else "Cannot answer from approved sources."
 
+    # Fail closed -> fallback instead (still grounded, still safe)
+    return _extractive_fallback()
     # Fail closed
     return "Cannot answer from approved sources. (Model output did not meet grounding/coverage requirements.)"
 

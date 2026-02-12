@@ -99,7 +99,7 @@ def _topic_from_question(question: str) -> str:
         return "hot_work"
     if any(k in q for k in ["working at heights", "fall arrest", "harness", "lanyard", "scaffold", "ewp"]):
         return "working_at_heights"
-    if any(k in q for k in ["isolation", "loto", "lockout", "tagout", "prove dead", "prove-dead"]):
+    if any(k in q for k in ["isolation", "loto", "lockout", "tagout", "prove dead", "prove-dead", "maintenance"]):
         return "isolation_loto"
     if any(k in q for k in ["ppe", "personal protective", "hard hat", "safety glasses", "gloves", "boots", "respirator"]):
         return "ppe"
