@@ -1,0 +1,72 @@
+name: Terraform - Azure AppService (plan/apply)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        required: true
+        options: [dev, prod]
+      action:
+        description: "Terraform action"
+        type: choice
+        required: true
+        options: [plan, apply]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform:
+    name: azure-appservice-${{ inputs.action }}-${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      TF_DIR: deploy/terraform/azure-appservice
+      TF_WORKSPACE: ${{ inputs.environment }}
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -upgrade
+
+      - name: Terraform workspace
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform workspace select "$TF_WORKSPACE" || terraform workspace new "$TF_WORKSPACE"
+
+      - name: Terraform plan
+        if: ${{ inputs.action == 'plan' }}
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform plan -out=tfplan
+
+      - name: Terraform apply
+        if: ${{ inputs.action == 'apply' }}
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -auto-approve
