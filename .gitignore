@@ -188,6 +188,9 @@ cython_debug/
 crash.log
 crash.*.log
 .terraform.lock.hcl
+**/tfplan
+**/.terraform/
+**/.terraform.lock.hcl
 
 # Local env / secrets
 .env
