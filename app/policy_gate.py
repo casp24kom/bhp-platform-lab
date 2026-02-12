@@ -113,7 +113,21 @@ TOPIC_EVIDENCE_TERMS: Dict[str, List[str]] = {
     "isolation_loto": ["loto", "lockout", "tagout", "isolate", "isolation", "prove dead", "try start", "group lock"],
     "ppe": ["ppe", "hard hat", "safety glasses", "gloves", "boots", "respirator", "hearing protection", "steel-capped"],
 }
+def _infer_topic_from_chunks(all_text: str) -> str:
+    """
+    If question was too generic, infer the topic from evidence terms present in retrieved chunks.
+    Returns best topic by number of evidence hits; otherwise 'general'.
+    """
+    best_topic = "general"
+    best_hits = 0
 
+    for topic, terms in TOPIC_EVIDENCE_TERMS.items():
+        hits = _has_any(all_text, terms)
+        if len(hits) > best_hits:
+            best_hits = len(hits)
+            best_topic = topic
+
+    return best_topic
 
 def _doc_risk_tier(chunks: List[Dict]) -> str:
     tier_order = {"LOW": 0, "MEDIUM": 1, "CRITICAL": 2}
@@ -246,6 +260,25 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
         min_overlap = 3
 
     if len(overlap) < min_overlap:
+        # ---- Rescue: question is generic, but sources may clearly match a strict topic ----
+        inferred = _infer_topic_from_chunks(all_text)
+
+        if inferred != "general":
+            evidence_terms = TOPIC_EVIDENCE_TERMS.get(inferred, [])
+            hits = _has_any(all_text, evidence_terms)
+
+            if hits:
+                return PolicyDecision(
+                    topic=inferred,
+                    allow_generation=True,
+                    risk_tier=risk_tier,
+                    mode="grounded",
+                    reason=f"[{risk_tier}] Passed (rescued): question was generic but sources match topic '{inferred}': {hits}",
+                    matched_terms=_unique(hits),
+                    confidence="high" if len(hits) >= 3 else "medium",
+                )
+
+        # ---- Original behaviour continues ----
         if risk_tier == "CRITICAL":
             return PolicyDecision(
                 topic="general",
@@ -256,6 +289,7 @@ def enforce_policy(question: str, chunks: List[Dict]) -> PolicyDecision:
                 matched_terms=overlap,
                 confidence="high",
             )
+
         return PolicyDecision(
             topic="general",
             allow_generation=True,
