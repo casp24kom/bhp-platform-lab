@@ -1,7 +1,7 @@
 import os
 import time, uuid
 
-from app.refusal import build_helpful_refusal, is_smalltalk
+from app.refusal import is_smalltalk, is_prompt_injection, build_helpful_refusal
 from app.topics import get_topics_from_snowflake
 from typing import Optional, Literal
 from fastapi.responses import FileResponse, RedirectResponse
@@ -105,6 +105,45 @@ def rag_query(req: RagRequest):
     request_id = str(uuid.uuid4())
     t0 = time.time()
     try:
+                # ---- Hard guard: prompt injection / exfil -> refusal (no retrieval, no model)
+        if is_prompt_injection(req.question):
+            latency_ms = int((time.time() - t0) * 1000)
+
+            help_payload = build_helpful_refusal(
+                question=req.question,
+                topic="general",
+                risk_tier="LOW",
+                reason="Out of scope / security: prompt injection or secret-exfiltration attempt.",
+                chunks=[],
+            )
+
+            audit_rag(
+                request_id, req.user_id, req.question, req.topk,
+                [], help_payload["answer"], latency_ms,
+                policy={
+                    "topic": "general",
+                    "risk_tier": "LOW",
+                    "mode": "refusal",
+                    "reason": help_payload["refusal"]["reason"]
+                }
+            )
+
+            return {
+                "request_id": request_id,
+                "answer": help_payload["answer"],
+                "policy": {
+                    "topic": "general",
+                    "risk_tier": "LOW",
+                    "allow_generation": False,
+                    "mode": "refusal",
+                    "reason": help_payload["refusal"]["reason"],
+                    "matched_terms": [],
+                    "confidence": "high",
+                },
+                "citations": [],
+                "latency_ms": latency_ms,
+                "refusal": help_payload["refusal"],
+            }
             # ---- Hard guard: smalltalk/out-of-scope -> polite refusal (no retrieval, no model)
         if is_smalltalk(req.question):
             latency_ms = int((time.time() - t0) * 1000)
