@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List, Dict, Optional, Tuple
 import re
 
 
@@ -58,6 +58,9 @@ class PolicyDecision:
     confidence: str = "low"
     mode: str = "grounded"          # grounded | advice
 
+    # NEW: lets you hint a topic without claiming it as policy.topic
+    suggested_topic: Optional[str] = None
+
 
 def decision_to_dict(d: PolicyDecision) -> Dict:
     return {
@@ -68,6 +71,7 @@ def decision_to_dict(d: PolicyDecision) -> Dict:
         "matched_terms": d.matched_terms,
         "confidence": d.confidence,
         "mode": d.mode,
+        "suggested_topic": d.suggested_topic,
     }
 
 
@@ -202,12 +206,12 @@ def _top_score(chunks: List[Dict]) -> float:
     return best
 
 
-def _split_hits(hits: List[str]) -> tuple[list[str], list[str]]:
+def _split_hits(hits: List[str]) -> Tuple[List[str], List[str]]:
     """
     Returns (strong_hits, weak_hits) based on WEAK_EVIDENCE_TERMS.
     """
-    strong = []
-    weak = []
+    strong: List[str] = []
+    weak: List[str] = []
     for h in hits:
         if (h or "").strip().lower() in WEAK_EVIDENCE_TERMS:
             weak.append(h)
@@ -279,7 +283,7 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
                 confidence="medium",
             )
 
-        # (B) If we only matched weak evidence terms (e.g., supervisor/permit), treat as insufficient.
+        # (B) Only weak evidence terms => insufficient for strict grounding
         if len(strong_hits) < 1:
             if risk_tier == "CRITICAL":
                 return PolicyDecision(
@@ -394,11 +398,13 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
                     confidence="high" if len(strong_hits) >= 2 else "medium",
                 )
 
-            # If we inferred a topic but only weak/insufficient hits -> fail closed for CRITICAL, advice otherwise
-            if inferred != "general" and hits:
+            # If we inferred a topic but only weak/insufficient hits -> do NOT claim the topic
+            # (Return topic='general' + suggested_topic=inferred)
+            if hits:
                 if risk_tier == "CRITICAL":
                     return PolicyDecision(
-                        topic=inferred,
+                        topic="general",
+                        suggested_topic=inferred,
                         allow_generation=False,
                         risk_tier=risk_tier,
                         mode="grounded",
@@ -407,7 +413,8 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
                         confidence="high",
                     )
                 return PolicyDecision(
-                    topic=inferred,
+                    topic="general",
+                    suggested_topic=inferred,
                     allow_generation=True,
                     risk_tier=risk_tier,
                     mode="advice",

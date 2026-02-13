@@ -105,7 +105,7 @@ def rag_query(req: RagRequest):
     request_id = str(uuid.uuid4())
     t0 = time.time()
     try:
-                # ---- Hard guard: prompt injection / exfil -> refusal (no retrieval, no model)
+        # ---- Hard guard: prompt injection / exfil -> refusal (no retrieval, no model)
         if is_prompt_injection(req.question):
             latency_ms = int((time.time() - t0) * 1000)
 
@@ -116,6 +116,9 @@ def rag_query(req: RagRequest):
                 reason="Out of scope / security: prompt injection or secret-exfiltration attempt.",
                 chunks=[],
             )
+
+            # (optional but nice) make refusal type explicit for UI
+            help_payload["refusal"]["type"] = "prompt_injection"
 
             audit_rag(
                 request_id, req.user_id, req.question, req.topk,
@@ -144,7 +147,8 @@ def rag_query(req: RagRequest):
                 "latency_ms": latency_ms,
                 "refusal": help_payload["refusal"],
             }
-            # ---- Hard guard: smalltalk/out-of-scope -> polite refusal (no retrieval, no model)
+
+        # ---- Hard guard: smalltalk/out-of-scope -> polite refusal (no retrieval, no model)
         if is_smalltalk(req.question):
             latency_ms = int((time.time() - t0) * 1000)
 
@@ -156,10 +160,18 @@ def rag_query(req: RagRequest):
                 chunks=[],
             )
 
+            # (optional) make refusal type explicit for UI
+            help_payload["refusal"]["type"] = "no_supported_answer"
+
             audit_rag(
                 request_id, req.user_id, req.question, req.topk,
                 [], help_payload["answer"], latency_ms,
-                policy={"topic": "general", "risk_tier": "LOW", "mode": "refusal", "reason": help_payload["refusal"]["reason"]}
+                policy={
+                    "topic": "general",
+                    "risk_tier": "LOW",
+                    "mode": "refusal",
+                    "reason": help_payload["refusal"]["reason"]
+                }
             )
 
             return {
@@ -178,12 +190,13 @@ def rag_query(req: RagRequest):
                 "latency_ms": latency_ms,
                 "refusal": help_payload["refusal"],
             }
+
         topic = (req.topic or _topic_from_question(req.question) or "general")
 
         # retrieval filtered by topic
         chunks = cortex_search(req.question, req.topk, topic_filter=topic)
 
-        # NEW: policy uses same topic
+        # policy uses same topic
         policy_decision = enforce_policy(req.question, chunks, topic_override=topic)
         policy = decision_to_dict(policy_decision)
 
@@ -197,17 +210,28 @@ def rag_query(req: RagRequest):
 
         gen_chunks = _filter_chunks_for_generation(chunks)
 
-        # If no chunks OR policy refuses, return helpful refusal (still fail-closed)
+        # ----------------------------
+        # UPDATED REFUSAL BLOCK (supports suggested_topic)
+        # ----------------------------
         if not chunks or not policy_decision.allow_generation:
             latency_ms = int((time.time() - t0) * 1000)
 
+            # IMPORTANT:
+            # If policy_decision.topic == "general" but it inferred something weakly,
+            # policy_decision.suggested_topic will hold the inferred topic for UI guidance.
+            refusal_topic = (policy_decision.topic or topic or "general").strip() or "general"
+
             help_payload = build_helpful_refusal(
                 question=req.question,
-                topic=policy_decision.topic or topic,
+                topic=refusal_topic,
                 risk_tier=(policy_decision.risk_tier or "LOW"),
                 reason=(policy_decision.reason or "[REFUSED]"),
                 chunks=chunks,
             )
+
+            # NEW: attach suggested_topic for UI (rescued-weak) if present
+            if getattr(policy_decision, "suggested_topic", None):
+                help_payload["refusal"]["suggested_topic"] = policy_decision.suggested_topic
 
             audit_rag(
                 request_id, req.user_id, req.question, req.topk,
@@ -221,20 +245,27 @@ def rag_query(req: RagRequest):
                 "policy": policy,
                 "citations": help_payload.get("citations", []),
                 "latency_ms": latency_ms,
-                "refusal": help_payload["refusal"],  # NEW structured details
+                "refusal": help_payload["refusal"],
             }
 
-        # Advice mode: treat as "not supported by SOP excerpts" (fail closed, but helpful)
+        # ----------------------------
+        # UPDATED ADVICE BLOCK (also supports suggested_topic)
+        # ----------------------------
         if policy_decision.mode == "advice":
             latency_ms = int((time.time() - t0) * 1000)
 
+            refusal_topic = (policy_decision.topic or topic or "general").strip() or "general"
+
             help_payload = build_helpful_refusal(
                 question=req.question,
-                topic=policy_decision.topic or topic,
+                topic=refusal_topic,
                 risk_tier=(policy_decision.risk_tier or "LOW"),
                 reason=("Not explicitly covered by retrieved SOP chunks. " + (policy_decision.reason or "")).strip(),
                 chunks=chunks,
             )
+
+            if getattr(policy_decision, "suggested_topic", None):
+                help_payload["refusal"]["suggested_topic"] = policy_decision.suggested_topic
 
             audit_rag(
                 request_id, req.user_id, req.question, req.topk,
@@ -260,6 +291,7 @@ def rag_query(req: RagRequest):
                 if txt:
                     bullets.append(f"- {txt} [{c.get('DOC_ID')}|{c.get('DOC_NAME')}#chunk{c.get('CHUNK_ID')}]")
             answer = "\n".join(bullets) if bullets else answer
+
         latency_ms = int((time.time() - t0) * 1000)
         audit_rag(request_id, req.user_id, req.question, req.topk, gen_chunks, answer, latency_ms, policy=policy)
 
