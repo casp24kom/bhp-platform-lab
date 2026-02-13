@@ -63,7 +63,7 @@ class PolicyDecision:
 
 
 def decision_to_dict(d: PolicyDecision) -> Dict:
-    return {
+    out = {
         "risk_tier": d.risk_tier,
         "topic": d.topic,
         "allow_generation": d.allow_generation,
@@ -71,8 +71,10 @@ def decision_to_dict(d: PolicyDecision) -> Dict:
         "matched_terms": d.matched_terms,
         "confidence": d.confidence,
         "mode": d.mode,
-        "suggested_topic": d.suggested_topic,
     }
+    if d.suggested_topic:
+        out["suggested_topic"] = d.suggested_topic
+    return out
 
 
 _STOPWORDS = {
@@ -243,8 +245,12 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
     # ----------------------------
     best_score = _top_score(chunks)
     if best_score < MIN_RELEVANCE_SCORE:
+        # Don't confidently claim a strict topic when retrieval is irrelevant.
+        # Keep topic general, but hint what was requested/inferred via suggested_topic.
+        suggested = topic if topic != "general" else None
         return PolicyDecision(
-            topic=topic,
+            topic="general" if suggested else topic,
+            suggested_topic=suggested,
             allow_generation=False,
             risk_tier=risk_tier,
             mode="grounded",
