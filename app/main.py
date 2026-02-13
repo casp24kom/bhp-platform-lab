@@ -1,6 +1,7 @@
 import os
 import time, uuid
 
+from app.refusal import build_helpful_refusal
 from app.topics import get_topics_from_snowflake
 from typing import Optional, Literal
 from fastapi.responses import FileResponse, RedirectResponse
@@ -123,30 +124,58 @@ def rag_query(req: RagRequest):
 
         gen_chunks = _filter_chunks_for_generation(chunks)
 
-        # If no chunks OR policy refuses, return deterministic refusal
+        # If no chunks OR policy refuses, return helpful refusal (still fail-closed)
         if not chunks or not policy_decision.allow_generation:
             latency_ms = int((time.time() - t0) * 1000)
-            refusal = ("Cannot answer from approved sources. " + (policy_decision.reason or "")).strip()
-            audit_rag(request_id, req.user_id, req.question, req.topk, chunks, refusal, latency_ms, policy=policy)
+
+            help_payload = build_helpful_refusal(
+                question=req.question,
+                topic=policy_decision.topic or topic,
+                risk_tier=(policy_decision.risk_tier or "LOW"),
+                reason=(policy_decision.reason or "[REFUSED]"),
+                chunks=chunks,
+            )
+
+            audit_rag(
+                request_id, req.user_id, req.question, req.topk,
+                chunks, help_payload["answer"], latency_ms,
+                policy=policy
+            )
+
             return {
                 "request_id": request_id,
-                "answer": refusal,
+                "answer": help_payload["answer"],
                 "policy": policy,
-                "citations": chunks,
+                "citations": help_payload.get("citations", []),
                 "latency_ms": latency_ms,
+                "refusal": help_payload["refusal"],  # NEW structured details
             }
 
-        # Advice mode: return deterministic “guidance only” message
+        # Advice mode: treat as "not supported by SOP excerpts" (fail closed, but helpful)
         if policy_decision.mode == "advice":
             latency_ms = int((time.time() - t0) * 1000)
-            msg = ("General guidance only (not explicitly covered in retrieved SOP chunks). " + (policy_decision.reason or "")).strip()
-            audit_rag(request_id, req.user_id, req.question, req.topk, chunks, msg, latency_ms, policy=policy)
+
+            help_payload = build_helpful_refusal(
+                question=req.question,
+                topic=policy_decision.topic or topic,
+                risk_tier=(policy_decision.risk_tier or "LOW"),
+                reason=("Not explicitly covered by retrieved SOP chunks. " + (policy_decision.reason or "")).strip(),
+                chunks=chunks,
+            )
+
+            audit_rag(
+                request_id, req.user_id, req.question, req.topk,
+                chunks, help_payload["answer"], latency_ms,
+                policy=policy
+            )
+
             return {
                 "request_id": request_id,
-                "answer": msg,
+                "answer": help_payload["answer"],
                 "policy": policy,
-                "citations": chunks,
+                "citations": help_payload.get("citations", []),
                 "latency_ms": latency_ms,
+                "refusal": help_payload["refusal"],
             }
 
         # Grounded mode -> generate using tier-filtered chunks

@@ -606,7 +606,27 @@
       }
 
       lastJson = j;
-      const answerText = raw ? JSON.stringify(j, null, 2) : (j.answer || "(no answer)");
+
+      let answerText = raw ? JSON.stringify(j, null, 2) : (j.answer || "(no answer)");
+
+      if(!raw && j.refusal){
+        const r = j.refusal;
+        const need = Array.isArray(r.what_i_need) ? r.what_i_need : [];
+        const tryAsking = Array.isArray(r.try_asking) ? r.try_asking : [];
+
+        const extra = [
+          "",
+          "—",
+          "To help me answer from SOP sources, please tell me:",
+          ...(need.map(x => `• ${x}`)),
+          "",
+          "Try asking:",
+          ...(tryAsking.map(x => `• ${x}`)),
+        ].join("\n");
+
+        answerText = answerText + extra;
+      }
+
       document.getElementById("answerBox").textContent = answerText;
       lastAnswerText = answerText;
 

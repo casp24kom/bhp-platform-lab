@@ -444,7 +444,6 @@ def generate_answer_in_snowflake(question: str, chunks: List[Dict[str, Any]]) ->
     # Fail closed -> fallback instead (still grounded, still safe)
     return _extractive_fallback()
     # Fail closed
-    return "Cannot answer from approved sources. (Model output did not meet grounding/coverage requirements.)"
 
 
 def audit_rag(
