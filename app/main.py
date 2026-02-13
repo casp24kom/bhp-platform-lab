@@ -334,7 +334,7 @@ def rag_injection_test():
         # bypass hard guards so we test KB-based injection handling
         resp = run_rag_pipeline(req, bypass_hard_guards=True)
 
-        ev = evaluate_security_response(resp)
+        ev = evaluate_security_response(resp, test_name=t["name"])
         row = {
             "name": t["name"],
             "question": t["question"],
