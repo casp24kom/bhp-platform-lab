@@ -2,7 +2,6 @@
 import re
 from typing import Any, Dict, List, Optional
 
-
 _SMALLTALK_PATTERNS = [
     r"^\s*hi\b", r"^\s*hello\b", r"^\s*hey\b",
     r"\bhow are you\b",
@@ -11,7 +10,7 @@ _SMALLTALK_PATTERNS = [
     r"\bwhat can you do\b",
 ]
 
-def _is_smalltalk(q: str) -> bool:
+def is_smalltalk(q: str) -> bool:
     t = (q or "").strip().lower()
     return any(re.search(p, t) for p in _SMALLTALK_PATTERNS)
 
@@ -91,7 +90,7 @@ def build_helpful_refusal(
     risk_tier = (risk_tier or "LOW").upper()
     reason = (reason or "").strip() or "[REFUSED]"
 
-    smalltalk = _is_smalltalk(question)
+    smalltalk = is_smalltalk(question)
     citations = chunks or []
 
     if smalltalk:

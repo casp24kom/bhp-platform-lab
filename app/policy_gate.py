@@ -5,6 +5,48 @@ from typing import List, Dict
 import re
 
 
+# -----------------------------
+# Tunables (Point C + B)
+# -----------------------------
+
+# (C) Minimum retrieval relevance score
+# Tune this in your environment. Start here; if you still see junk matches, raise to ~0.45.
+MIN_RELEVANCE_SCORE = 0.42
+
+# (B) Weak terms that should NOT be enough to "rescue" a generic question into a topic.
+# These are common words that appear in many SOPs and cause false topic matches.
+WEAK_EVIDENCE_TERMS = {
+    "permit",
+    "entry permit",
+    "supervisor",
+    "required",
+    "requirements",
+    "controls",
+    "steps",
+    "procedure",
+    "process",
+    "report",
+    "record",
+    "check",
+    "ensure",
+    "use",
+    "must",
+    "should",
+    "before",
+    "after",
+    "during",
+    "work",
+    "task",
+    "personnel",
+}
+
+# For "rescued" grounding:
+# - require at least this many evidence hits
+# - and at least one STRONG hit (not in WEAK_EVIDENCE_TERMS)
+RESCUE_MIN_TOTAL_HITS = 2
+RESCUE_MIN_STRONG_HITS = 1
+
+
 @dataclass
 class PolicyDecision:
     topic: str
@@ -107,12 +149,15 @@ def _topic_from_question(question: str) -> str:
 
 
 TOPIC_EVIDENCE_TERMS: Dict[str, List[str]] = {
+    # NOTE: kept as-is, but weak terms are filtered during rescue/strict checks.
     "confined_space": ["confined space", "permit", "entry permit", "standby", "rescue", "entrant", "supervisor"],
     "hot_work": ["hot work", "permit", "welding", "cutting", "grinding", "spark", "fire watch", "extinguisher"],
     "working_at_heights": ["working at heights", "harness", "lanyard", "anchor", "fall arrest", "scaffold", "ewp", "guardrail"],
     "isolation_loto": ["loto", "lockout", "tagout", "isolate", "isolation", "prove dead", "try start", "group lock"],
     "ppe": ["ppe", "hard hat", "safety glasses", "gloves", "boots", "respirator", "hearing protection", "steel-capped"],
 }
+
+
 def _infer_topic_from_chunks(all_text: str) -> str:
     """
     If question was too generic, infer the topic from evidence terms present in retrieved chunks.
@@ -129,6 +174,7 @@ def _infer_topic_from_chunks(all_text: str) -> str:
 
     return best_topic
 
+
 def _doc_risk_tier(chunks: List[Dict]) -> str:
     tier_order = {"LOW": 0, "MEDIUM": 1, "CRITICAL": 2}
     best = "LOW"
@@ -139,6 +185,35 @@ def _doc_risk_tier(chunks: List[Dict]) -> str:
         if tier_order[t] > tier_order[best]:
             best = t
     return best
+
+
+def _top_score(chunks: List[Dict]) -> float:
+    if not chunks:
+        return 0.0
+    best = 0.0
+    for c in chunks:
+        s = c.get("SCORE")
+        try:
+            sf = float(s) if s is not None else 0.0
+        except Exception:
+            sf = 0.0
+        if sf > best:
+            best = sf
+    return best
+
+
+def _split_hits(hits: List[str]) -> tuple[list[str], list[str]]:
+    """
+    Returns (strong_hits, weak_hits) based on WEAK_EVIDENCE_TERMS.
+    """
+    strong = []
+    weak = []
+    for h in hits:
+        if (h or "").strip().lower() in WEAK_EVIDENCE_TERMS:
+            weak.append(h)
+        else:
+            strong.append(h)
+    return strong, weak
 
 
 def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None = None) -> PolicyDecision:
@@ -160,12 +235,28 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
     risk_tier = _doc_risk_tier(chunks)
 
     # ----------------------------
+    # (C) Relevance gate: refuse if top score is too low
+    # ----------------------------
+    best_score = _top_score(chunks)
+    if best_score < MIN_RELEVANCE_SCORE:
+        return PolicyDecision(
+            topic=topic,
+            allow_generation=False,
+            risk_tier=risk_tier,
+            mode="grounded",
+            reason=f"[NO_RELEVANT] Top retrieval score too low ({best_score:.3f} < {MIN_RELEVANCE_SCORE:.2f}).",
+            matched_terms=[],
+            confidence="high",
+        )
+
+    # ----------------------------
     # STRICT PATH (topic != general)
     # ----------------------------
     KNOWN_TOPICS = set(TOPIC_EVIDENCE_TERMS.keys())
     if topic != "general" and topic in KNOWN_TOPICS:
         evidence_terms = TOPIC_EVIDENCE_TERMS.get(topic, [])
         hits = _has_any(all_text, evidence_terms)
+        strong_hits, weak_hits = _split_hits(hits)
 
         if not hits:
             if risk_tier == "CRITICAL":
@@ -185,6 +276,28 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
                 mode="advice",
                 reason=f"[{risk_tier}] Not explicitly covered in SOP chunks for topic '{topic}'; providing general guidance only.",
                 matched_terms=[],
+                confidence="medium",
+            )
+
+        # (B) If we only matched weak evidence terms (e.g., supervisor/permit), treat as insufficient.
+        if len(strong_hits) < 1:
+            if risk_tier == "CRITICAL":
+                return PolicyDecision(
+                    topic=topic,
+                    allow_generation=False,
+                    risk_tier=risk_tier,
+                    mode="grounded",
+                    reason=f"[{risk_tier}] Refused: only weak evidence terms matched for topic '{topic}': {weak_hits}",
+                    matched_terms=_unique(hits),
+                    confidence="high",
+                )
+            return PolicyDecision(
+                topic=topic,
+                allow_generation=True,
+                risk_tier=risk_tier,
+                mode="advice",
+                reason=f"[{risk_tier}] Weak SOP match (only generic evidence terms matched) for topic '{topic}'; providing general guidance only.",
+                matched_terms=_unique(hits),
                 confidence="medium",
             )
 
@@ -219,7 +332,7 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
             mode="grounded",
             reason=f"[{risk_tier}] Passed: evidence terms found in sources: {hits}",
             matched_terms=_unique(hits),
-            confidence="high" if len(hits) >= 3 else "medium",
+            confidence="high" if len(strong_hits) >= 2 else "medium",
         )
 
     # ----------------------------
@@ -267,8 +380,10 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
         if inferred != "general":
             evidence_terms = TOPIC_EVIDENCE_TERMS.get(inferred, [])
             hits = _has_any(all_text, evidence_terms)
+            strong_hits, weak_hits = _split_hits(hits)
 
-            if hits:
+            # (B) Rescue is ONLY allowed if it has enough evidence and at least one strong hit.
+            if hits and (len(hits) >= RESCUE_MIN_TOTAL_HITS) and (len(strong_hits) >= RESCUE_MIN_STRONG_HITS):
                 return PolicyDecision(
                     topic=inferred,
                     allow_generation=True,
@@ -276,7 +391,29 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
                     mode="grounded",
                     reason=f"[{risk_tier}] Passed (rescued): question was generic but sources match topic '{inferred}': {hits}",
                     matched_terms=_unique(hits),
-                    confidence="high" if len(hits) >= 3 else "medium",
+                    confidence="high" if len(strong_hits) >= 2 else "medium",
+                )
+
+            # If we inferred a topic but only weak/insufficient hits -> fail closed for CRITICAL, advice otherwise
+            if inferred != "general" and hits:
+                if risk_tier == "CRITICAL":
+                    return PolicyDecision(
+                        topic=inferred,
+                        allow_generation=False,
+                        risk_tier=risk_tier,
+                        mode="grounded",
+                        reason=f"[{risk_tier}] Refused (rescued-weak): inferred '{inferred}' but evidence was weak/insufficient: strong={strong_hits}, weak={weak_hits}",
+                        matched_terms=_unique(hits),
+                        confidence="high",
+                    )
+                return PolicyDecision(
+                    topic=inferred,
+                    allow_generation=True,
+                    risk_tier=risk_tier,
+                    mode="advice",
+                    reason=f"[{risk_tier}] Weak match (rescued-weak): inferred '{inferred}' but evidence was weak/insufficient; providing general guidance only.",
+                    matched_terms=_unique(hits),
+                    confidence="medium",
                 )
 
         # ---- Original behaviour continues ----
