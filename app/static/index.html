@@ -235,8 +235,11 @@
       width: 76px;
       padding:10px;
     }
+
+    /* FIX #2: hide desktop ask controls on mobile so you don't see two Ask buttons */
     @media (max-width: 980px){
       .mobile-bar{ display:block; }
+      .desktop-ask-controls{ display:none !important; }  /* <-- NEW */
     }
   </style>
 </head>
@@ -267,7 +270,8 @@
         <div class="row" style="justify-content:space-between;">
           <div class="pill" id="statusPill"><span class="dot" id="statusDot"></span><span id="statusText">Checking service…</span></div>
 
-          <div class="row">
+          <!-- FIX #2: wrap desktop ask controls so we can hide on mobile -->
+          <div class="row desktop-ask-controls">
             <label>topk</label>
             <input id="topk" type="number" min="1" max="10" value="3" />
             <button id="askBtn" onclick="ask(false)">
@@ -410,7 +414,6 @@
     const sel = document.getElementById("topicSelect").value;
     if(!sel) return;
     setQ(templates[sel] || "");
-    // keep focus on textarea for quick typing
     document.getElementById("q").focus();
   }
 
@@ -460,13 +463,13 @@
   function setLoading(isLoading){
     const btn = document.getElementById("askBtn");
     const btnM = document.getElementById("askBtnMobile");
+
+    // btn may be hidden on mobile, but still exists
     btn.disabled = isLoading;
     btnM.disabled = isLoading;
 
     btn.classList.toggle("loading", isLoading);
     btnM.classList.toggle("loading", isLoading);
-
-    // spinner visibility is handled by .loading class
   }
 
   async function ask(fromMobile){
@@ -478,7 +481,16 @@
     topkDesktop.value = chosenTopk;
     topkMobile.value = chosenTopk;
 
-    const q = document.getElementById("q").value.trim();
+    // FIX #1: snapshot question, then clear input immediately
+    const qEl = document.getElementById("q");
+    const q = (qEl.value || "").trim();
+    if(!q){
+      qEl.focus();
+      return;
+    }
+    qEl.value = "";
+    qEl.focus();
+
     const user_id = document.getElementById("userId").value || "demo";
     const raw = document.getElementById("raw").checked;
 
@@ -550,7 +562,6 @@
       btn.textContent = "Copied!";
       setTimeout(() => btn.textContent = old, 900);
     }catch(e){
-      // fallback for older browsers
       const ta = document.createElement("textarea");
       ta.value = lastAnswerText || "";
       document.body.appendChild(ta);

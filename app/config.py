@@ -6,7 +6,15 @@ import os, base64
 class Settings(BaseModel):
     app_env: str = os.getenv("APP_ENV", "prod-demo")
     data_dir: str = os.getenv("DATA_DIR", "/data")
+    kb_chunks_table: str = os.getenv(
+    "KB_CHUNKS_TABLE",
+    "BHP_PLATFORM_LAB.KB.SOP_CHUNKS_ENRICHED"  # <-- IMPORTANT: use your VIEW
+    )
 
+    topic_templates_table: str = os.getenv(
+    "TOPIC_TEMPLATES_TABLE",
+    "BHP_PLATFORM_LAB.KB.TOPIC_TEMPLATES"
+    )
     sf_private_key_pem_path: str = os.getenv("SF_PRIVATE_KEY_PEM_PATH", "")
     sf_account_identifier: str = os.getenv("SF_ACCOUNT_IDENTIFIER", "")
     sf_account_url: str = os.getenv("SF_ACCOUNT_URL", "")

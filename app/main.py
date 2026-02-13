@@ -1,6 +1,7 @@
 import os
 import time, uuid
 
+from app.topics import get_topics_from_snowflake
 from typing import Optional, Literal
 from fastapi.responses import FileResponse, RedirectResponse
 from pathlib import Path
@@ -19,6 +20,15 @@ app = FastAPI(title="Data & AI Platform Lab", version="1.0")
 
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+@app.get("/meta/topics")
+def meta_topics():
+    try:
+        topics = get_topics_from_snowflake()
+        return {"topics": topics}
+    except Exception as e:
+        # soft-fail so UI can fall back if needed
+        return {"topics": [], "error": str(e)}
 
 # ---- UI handling: serve static index if present, else redirect to /docs
 @app.get("/", include_in_schema=False)
