@@ -221,6 +221,11 @@ def _split_hits(hits: List[str]) -> Tuple[List[str], List[str]]:
             strong.append(h)
     return strong, weak
 
+def _has_security_injection_chunks(chunks: List[Dict]) -> bool:
+    for c in chunks or []:
+        if (c.get("DOC_TOPIC") or "").strip().lower() == "security_injection":
+            return True
+    return False
 
 def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None = None) -> PolicyDecision:
     topic = topic_override or _topic_from_question(question) or "general"
@@ -239,6 +244,19 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
     all_text = _chunk_texts(chunks)
     specific_terms = _extract_specific_terms(question)
     risk_tier = _doc_risk_tier(chunks)
+    
+        # HARD BLOCK: never answer from security_injection docs (even if retrieved)
+    if _has_security_injection_chunks(chunks):
+        return PolicyDecision(
+            topic="general",
+            suggested_topic="security_injection",
+            allow_generation=False,
+            risk_tier="CRITICAL",
+            mode="grounded",
+            reason="[CRITICAL] Refused: retrieved security_injection content (test/malicious instructions).",
+            matched_terms=[],
+            confidence="high",
+        )
 
     # ----------------------------
     # (C) Relevance gate: refuse if top score is too low
