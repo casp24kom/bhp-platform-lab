@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 from app.policy_gate import enforce_policy, decision_to_dict, _topic_from_question
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.config import settings
 from app.snowflake_conn import get_sf_connection
 from app.snowflake_rag import cortex_search, generate_answer_in_snowflake, audit_rag
@@ -21,14 +21,6 @@ app = FastAPI(title="Data & AI Platform Lab", version="1.0")
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-@app.get("/meta/topics")
-def meta_topics():
-    try:
-        topics = get_topics_from_snowflake()
-        return {"topics": topics}
-    except Exception as e:
-        # soft-fail so UI can fall back if needed
-        return {"topics": [], "error": str(e)}
 
 # ---- UI handling: serve static index if present, else redirect to /docs
 @app.get("/", include_in_schema=False)
@@ -86,7 +78,7 @@ class RagRequest(BaseModel):
     user_id: str = "demo"
     question: str
     topk: int = 5
-    topic: Optional[AllowedTopic] = None  # NEW (optional override)
+    topic: Optional[str] = Field(default=None, max_length=64)  # allow dynamic topics
 
 class DqRequest(BaseModel):
     user_id: str = "demo"
@@ -96,6 +88,16 @@ class DqRequest(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok", "env": settings.app_env}
+
+@app.get("/meta/topics")
+def meta_topics():
+    try:
+        topics = get_topics_from_snowflake()
+        return {"topics": topics}
+    except Exception as e:
+        # soft-fail so UI can fall back if needed
+        return {"topics": [], "error": str(e)}
+
 
 @app.post("/rag/query")
 def rag_query(req: RagRequest):

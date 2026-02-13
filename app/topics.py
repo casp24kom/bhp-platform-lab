@@ -6,12 +6,6 @@ from app.snowflake_conn import get_sf_connection
 
 
 def get_topics_from_snowflake(limit: int = 200) -> List[Dict[str, Any]]:
-    """
-    Returns list of topics + label/template/examples + chunk counts by risk tier.
-    Source of truth:
-      - topics/counts from KB_CHUNKS_TABLE (your SOP_CHUNKS_ENRICHED view)
-      - label/template/examples from TOPIC_TEMPLATES_TABLE
-    """
     chunks_tbl = settings.kb_chunks_table
     tmpl_tbl = settings.topic_templates_table
 

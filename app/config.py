@@ -6,6 +6,7 @@ import os, base64
 class Settings(BaseModel):
     app_env: str = os.getenv("APP_ENV", "prod-demo")
     data_dir: str = os.getenv("DATA_DIR", "/data")
+    
     kb_chunks_table: str = os.getenv(
     "KB_CHUNKS_TABLE",
     "BHP_PLATFORM_LAB.KB.SOP_CHUNKS_ENRICHED"  # <-- IMPORTANT: use your VIEW

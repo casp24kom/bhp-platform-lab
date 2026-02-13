@@ -162,7 +162,8 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
     # ----------------------------
     # STRICT PATH (topic != general)
     # ----------------------------
-    if topic != "general":
+    KNOWN_TOPICS = set(TOPIC_EVIDENCE_TERMS.keys())
+    if topic != "general" and topic in KNOWN_TOPICS:
         evidence_terms = TOPIC_EVIDENCE_TERMS.get(topic, [])
         hits = _has_any(all_text, evidence_terms)
 

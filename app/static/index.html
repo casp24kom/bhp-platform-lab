@@ -392,6 +392,9 @@
   </div>
 
 <script>
+  let TOPICS = [];          // from /meta/topics
+  let TEMPLATE_MAP = {};    // topic -> template question
+  let EXAMPLES_MAP = {};    // topic -> examples[]
   let lastAnswerText = "";
   let lastJson = null;
 
@@ -408,12 +411,92 @@
       "What PPE is required for grinding and cutting tasks, and what minimum controls apply?"
   };
 
+  async function loadTopics(){
+  const sel = document.getElementById("topicSelect");
+  const examplesWrap = document.querySelector(".examples");
+  try{
+    const r = await fetch("/meta/topics", {cache:"no-store"});
+    if(!r.ok) throw new Error("meta/topics not ok");
+    const j = await r.json();
+    TOPICS = j.topics || [];
+
+    // reset dropdown
+    sel.innerHTML = `<option value="">(pick a template…)</option>`;
+
+    TEMPLATE_MAP = {};
+    EXAMPLES_MAP = {};
+
+    // sort: topics that have templates first, then by TOTAL desc
+    TOPICS.sort((a,b)=>{
+      const at = (a.template && a.template.trim()) ? 0 : 1;
+      const bt = (b.template && b.template.trim()) ? 0 : 1;
+      if(at !== bt) return at - bt;
+      return (b.counts?.TOTAL || 0) - (a.counts?.TOTAL || 0);
+    });
+
+    for(const t of TOPICS){
+      const topic = t.topic;
+      const label = t.label || topic;
+      const total = t.counts?.TOTAL ?? 0;
+      const crit  = t.counts?.CRITICAL ?? 0;
+      const med   = t.counts?.MEDIUM ?? 0;
+      const low   = t.counts?.LOW ?? 0;
+
+      TEMPLATE_MAP[topic] = (t.template || "").trim();
+      EXAMPLES_MAP[topic] = Array.isArray(t.examples) ? t.examples : [];
+
+      // show useful stats in the dropdown label
+      const opt = document.createElement("option");
+      opt.value = topic;
+      opt.textContent = `${label} — total ${total} (C${crit}/M${med}/L${low})`;
+      sel.appendChild(opt);
+    }
+
+    // rebuild examples area (first keep the "Examples:" label)
+    const labelEl = examplesWrap.querySelector(".muted");
+    examplesWrap.innerHTML = "";
+    examplesWrap.appendChild(labelEl);
+
+    // add 6–10 example buttons across topics (prefer ones with examples)
+    const pool = [];
+    for(const t of TOPICS){
+      for(const ex of (EXAMPLES_MAP[t.topic] || [])){
+        pool.push({topic: t.topic, text: ex});
+      }
+    }
+    // fallback if no examples exist
+    if(pool.length === 0){
+      pool.push({topic:"general", text:"What is the procedure before maintenance?"});
+    }
+
+    pool.slice(0, 10).forEach(p=>{
+      const b = document.createElement("button");
+      b.className = "btn-secondary";
+      b.textContent = p.text.length > 34 ? p.text.slice(0,34) + "…" : p.text;
+      b.onclick = () => { setQ(p.text); document.getElementById("topicSelect").value = p.topic; };
+      examplesWrap.appendChild(b);
+    });
+
+    // pick default topic: isolation_loto if present, else first topic
+    const defaultTopic = TOPICS.find(x=>x.topic==="isolation_loto")?.topic || TOPICS[0]?.topic || "";
+    if(defaultTopic){
+      sel.value = defaultTopic;
+      if(TEMPLATE_MAP[defaultTopic]) setQ(TEMPLATE_MAP[defaultTopic]);
+    }
+  }catch(e){
+    console.error(e);
+    // keep your current static templates as a fallback if you want
+  }
+}
   function setQ(t){ document.getElementById("q").value = t; }
 
   function applyTopicTemplate(){
-    const sel = document.getElementById("topicSelect").value;
-    if(!sel) return;
-    setQ(templates[sel] || "");
+    const selVal = document.getElementById("topicSelect").value;
+    if(!selVal) return;
+
+    const t = TEMPLATE_MAP[selVal] || "";
+    if(t) setQ(t);
+
     document.getElementById("q").focus();
   }
 
@@ -582,8 +665,8 @@
   });
 
   // defaults
-  setQ(templates.isolation_loto);
   healthCheck();
+  loadTopics();
 </script>
 </body>
 </html>
