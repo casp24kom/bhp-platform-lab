@@ -205,12 +205,15 @@ def rag_query(req: RagRequest):
         gen_chunks = _filter_chunks_for_generation(chunks)
 
         # ----------------------------
-        # UPDATED REFUSAL BLOCK (supports suggested_topic)
+        # UPDATED REFUSAL BLOCK (uses suggested_topic for guidance)
         # ----------------------------
         if not chunks or not policy_decision.allow_generation:
             latency_ms = int((time.time() - t0) * 1000)
 
-            refusal_topic = (policy_decision.topic or topic or "general").strip() or "general"
+            suggested = getattr(policy_decision, "suggested_topic", None)
+
+            # IMPORTANT: drive refusal guidance off suggested_topic when present
+            refusal_topic = (suggested or policy_decision.topic or topic or "general").strip() or "general"
 
             help_payload = build_helpful_refusal(
                 question=req.question,
@@ -220,11 +223,10 @@ def rag_query(req: RagRequest):
                 chunks=chunks,
             )
 
-            # If enforce_policy provides suggested_topic, attach to BOTH policy + refusal
-            suggested = getattr(policy_decision, "suggested_topic", None)
+            # Ensure both policy + refusal carry suggested_topic for UI
             if suggested:
-                
                 policy["suggested_topic"] = suggested
+                help_payload["refusal"]["suggested_topic"] = suggested
 
             audit_rag(
                 request_id, req.user_id, req.question, req.topk,
@@ -242,12 +244,13 @@ def rag_query(req: RagRequest):
             }
 
         # ----------------------------
-        # UPDATED ADVICE BLOCK (also supports suggested_topic)
+        # UPDATED ADVICE BLOCK (also uses suggested_topic for guidance)
         # ----------------------------
         if policy_decision.mode == "advice":
             latency_ms = int((time.time() - t0) * 1000)
 
-            refusal_topic = (policy_decision.topic or topic or "general").strip() or "general"
+            suggested = getattr(policy_decision, "suggested_topic", None)
+            refusal_topic = (suggested or policy_decision.topic or topic or "general").strip() or "general"
 
             help_payload = build_helpful_refusal(
                 question=req.question,
@@ -257,10 +260,9 @@ def rag_query(req: RagRequest):
                 chunks=chunks,
             )
 
-            suggested = getattr(policy_decision, "suggested_topic", None)
             if suggested:
-                help_payload["refusal"]["suggested_topic"] = suggested
                 policy["suggested_topic"] = suggested
+                help_payload["refusal"]["suggested_topic"] = suggested
 
             audit_rag(
                 request_id, req.user_id, req.question, req.topk,

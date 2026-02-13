@@ -227,19 +227,14 @@ def build_helpful_refusal(
 
     # Use suggested_topic (if any) to drive follow-ups and rephrases,
     # even when the UI "topic" is kept as general.
-    followup_topic = suggested_topic or display_topic
+    followup_topic = (suggested_topic or display_topic or "general")
     followups = _follow_up_questions(followup_topic)
     rephrases = _suggest_rephrases(question, followup_topic)
-
-    # ✅ AMENDMENT: if UI topic is 'general' but we have a suggested_topic, use it for guidance.
-    guidance_topic = suggested_topic or display_topic
-    if not guidance_topic:
-        guidance_topic = "general"
 
     headline = "I can’t confirm an answer from the approved SOP sources for that question."
     answer = _format_help_into_answer(headline, followups, rephrases)
 
-    refusal_obj = {
+    refusal_obj: Dict[str, Any] = {
         "type": "no_supported_answer",
         "risk_tier": risk_tier,
         "topic": display_topic,   # keep UI-clean topic (often 'general' for rescued-weak)
