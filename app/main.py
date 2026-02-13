@@ -223,7 +223,7 @@ def rag_query(req: RagRequest):
             # If enforce_policy provides suggested_topic, attach to BOTH policy + refusal
             suggested = getattr(policy_decision, "suggested_topic", None)
             if suggested:
-                help_payload["refusal"]["suggested_topic"] = suggested
+                
                 policy["suggested_topic"] = suggested
 
             audit_rag(
