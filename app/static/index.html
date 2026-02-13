@@ -236,11 +236,44 @@
       padding:10px;
     }
 
-    /* FIX #2: hide desktop ask controls on mobile so you don't see two Ask buttons */
+    /* hide desktop ask controls on mobile so you don't see two Ask buttons */
     @media (max-width: 980px){
       .mobile-bar{ display:block; }
-      .desktop-ask-controls{ display:none !important; }  /* <-- NEW */
+      .desktop-ask-controls{ display:none !important; }
     }
+
+    /* --- NEW: Security test report styles --- */
+    .sec-box{
+      margin-top: 12px;
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+    .sec-grid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:10px;
+      margin-top:10px;
+    }
+    .sec-item{
+      border:1px solid var(--line);
+      border-radius:12px;
+      background:#0c121c;
+      padding:10px;
+    }
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      border:1px solid var(--line);
+      border-radius:999px;
+      padding:4px 8px;
+      font-size:12px;
+      color:var(--muted);
+      background:#0b0f14;
+    }
+    .badge.ok{ color: var(--ok); border-color: rgba(27,217,106,0.35); }
+    .badge.bad{ color: var(--bad); border-color: rgba(255,92,92,0.35); }
+    .muted{ color: var(--muted); }
   </style>
 </head>
 
@@ -270,7 +303,6 @@
         <div class="row" style="justify-content:space-between;">
           <div class="pill" id="statusPill"><span class="dot" id="statusDot"></span><span id="statusText">Checking service…</span></div>
 
-          <!-- FIX #2: wrap desktop ask controls so we can hide on mobile -->
           <div class="row desktop-ask-controls">
             <label>topk</label>
             <input id="topk" type="number" min="1" max="10" value="3" />
@@ -335,13 +367,49 @@
             <div class="kv" style="grid-column:1/-1;"><b>Policy reason</b>: <span id="mReason"></span></div>
           </div>
 
-          <!-- Collapsible citations -->
           <details id="citationsDetails" open>
             <summary>
               Citations (top matches)
               <span class="summary-sub" id="citeCount"></span>
             </summary>
             <div id="cites"></div>
+          </details>
+        </div>
+
+        <!-- ✅ NEW: Security tests -->
+        <div class="sec-box">
+          <div class="row" style="justify-content:space-between;">
+            <div class="pill" id="secPill">
+              <span class="dot" id="secDot"></span>
+              <span id="secText">Security tests: not run</span>
+            </div>
+
+            <div class="row">
+              <button class="btn-secondary" id="secBtn" onclick="runSecurityTests()">
+                <span class="spinner" id="spinSec"></span>
+                Run Security Tests
+              </button>
+
+              <div class="pill">
+                <label style="margin:0;">Show test JSON</label>
+                <input id="secRaw" type="checkbox" />
+              </div>
+            </div>
+          </div>
+
+          <div id="secSummary" class="small" style="display:none;"></div>
+
+          <details id="secDetails" style="display:none;" open>
+            <summary>
+              Failures
+              <span class="summary-sub" id="secFailCount"></span>
+            </summary>
+            <div id="secFailures" class="sec-grid"></div>
+          </details>
+
+          <details id="secJsonDetails" style="display:none;">
+            <summary>Full JSON report</summary>
+            <pre id="secJson"></pre>
           </details>
         </div>
       </div>
@@ -352,6 +420,7 @@
           <li><b>Retrieval</b>: searches a Cortex Search index for SOP chunks.</li>
           <li><b>Policy gate</b>: enforces grounding rules and refuses weak matches.</li>
           <li><b>Answering</b>: returns bullet answers that end with citation tags.</li>
+          <li><b>Security tests</b>: runs a suite of prompt-injection checks against the KB.</li>
         </ul>
 
         <h3>What questions work best</h3>
@@ -392,111 +461,89 @@
   </div>
 
 <script>
-  let TOPICS = [];          // from /meta/topics
-  let TEMPLATE_MAP = {};    // topic -> template question
-  let EXAMPLES_MAP = {};    // topic -> examples[]
+  let TOPICS = [];
+  let TEMPLATE_MAP = {};
+  let EXAMPLES_MAP = {};
   let lastAnswerText = "";
   let lastJson = null;
-
-  const templates = {
-    isolation_loto:
-      "What is the lockout tagout (LOTO) procedure before maintenance?",
-    confined_space:
-      "What are the steps for confined space entry, including entry permit and standby requirements?",
-    hot_work:
-      "What are the hot work permit controls and fire watch requirements before starting welding/cutting/grinding?",
-    working_at_heights:
-      "What are the working at heights controls (harness/lanyard, anchors, scaffold/EWP) required before starting work?",
-    ppe:
-      "What PPE is required for grinding and cutting tasks, and what minimum controls apply?"
-  };
+  let lastSecurityReport = null;
 
   async function loadTopics(){
-  const sel = document.getElementById("topicSelect");
-  const examplesWrap = document.querySelector(".examples");
-  try{
-    const r = await fetch("/meta/topics", {cache:"no-store"});
-    if(!r.ok) throw new Error("meta/topics not ok");
-    const j = await r.json();
-    TOPICS = j.topics || [];
+    const sel = document.getElementById("topicSelect");
+    const examplesWrap = document.querySelector(".examples");
+    try{
+      const r = await fetch("/meta/topics", {cache:"no-store"});
+      if(!r.ok) throw new Error("meta/topics not ok");
+      const j = await r.json();
+      TOPICS = j.topics || [];
 
-    // reset dropdown
-    sel.innerHTML = `<option value="">(pick a template…)</option>`;
+      sel.innerHTML = `<option value="">(pick a template…)</option>`;
+      TEMPLATE_MAP = {};
+      EXAMPLES_MAP = {};
 
-    TEMPLATE_MAP = {};
-    EXAMPLES_MAP = {};
+      TOPICS.sort((a,b)=>{
+        const at = (a.template && a.template.trim()) ? 0 : 1;
+        const bt = (b.template && b.template.trim()) ? 0 : 1;
+        if(at !== bt) return at - bt;
+        return (b.counts?.TOTAL || 0) - (a.counts?.TOTAL || 0);
+      });
 
-    // sort: topics that have templates first, then by TOTAL desc
-    TOPICS.sort((a,b)=>{
-      const at = (a.template && a.template.trim()) ? 0 : 1;
-      const bt = (b.template && b.template.trim()) ? 0 : 1;
-      if(at !== bt) return at - bt;
-      return (b.counts?.TOTAL || 0) - (a.counts?.TOTAL || 0);
-    });
+      for(const t of TOPICS){
+        const topic = t.topic;
+        const label = t.label || topic;
+        const total = t.counts?.TOTAL ?? 0;
+        const crit  = t.counts?.CRITICAL ?? 0;
+        const med   = t.counts?.MEDIUM ?? 0;
+        const low   = t.counts?.LOW ?? 0;
 
-    for(const t of TOPICS){
-      const topic = t.topic;
-      const label = t.label || topic;
-      const total = t.counts?.TOTAL ?? 0;
-      const crit  = t.counts?.CRITICAL ?? 0;
-      const med   = t.counts?.MEDIUM ?? 0;
-      const low   = t.counts?.LOW ?? 0;
+        TEMPLATE_MAP[topic] = (t.template || "").trim();
+        EXAMPLES_MAP[topic] = Array.isArray(t.examples) ? t.examples : [];
 
-      TEMPLATE_MAP[topic] = (t.template || "").trim();
-      EXAMPLES_MAP[topic] = Array.isArray(t.examples) ? t.examples : [];
-
-      // show useful stats in the dropdown label
-      const opt = document.createElement("option");
-      opt.value = topic;
-      opt.textContent = `${label} — total ${total} (C${crit}/M${med}/L${low})`;
-      sel.appendChild(opt);
-    }
-
-    // rebuild examples area (first keep the "Examples:" label)
-    const labelEl = examplesWrap.querySelector(".muted");
-    examplesWrap.innerHTML = "";
-    examplesWrap.appendChild(labelEl);
-
-    // add 6–10 example buttons across topics (prefer ones with examples)
-    const pool = [];
-    for(const t of TOPICS){
-      for(const ex of (EXAMPLES_MAP[t.topic] || [])){
-        pool.push({topic: t.topic, text: ex});
+        const opt = document.createElement("option");
+        opt.value = topic;
+        opt.textContent = `${label} — total ${total} (C${crit}/M${med}/L${low})`;
+        sel.appendChild(opt);
       }
-    }
-    // fallback if no examples exist
-    if(pool.length === 0){
-      pool.push({topic:"general", text:"What is the procedure before maintenance?"});
-    }
 
-    pool.slice(0, 10).forEach(p=>{
-      const b = document.createElement("button");
-      b.className = "btn-secondary";
-      b.textContent = p.text.length > 34 ? p.text.slice(0,34) + "…" : p.text;
-      b.onclick = () => { setQ(p.text); document.getElementById("topicSelect").value = p.topic; };
-      examplesWrap.appendChild(b);
-    });
+      const labelEl = examplesWrap.querySelector(".muted");
+      examplesWrap.innerHTML = "";
+      examplesWrap.appendChild(labelEl);
 
-    // pick default topic: isolation_loto if present, else first topic
-    const defaultTopic = TOPICS.find(x=>x.topic==="isolation_loto")?.topic || TOPICS[0]?.topic || "";
-    if(defaultTopic){
-      sel.value = defaultTopic;
-      if(TEMPLATE_MAP[defaultTopic]) setQ(TEMPLATE_MAP[defaultTopic]);
+      const pool = [];
+      for(const t of TOPICS){
+        for(const ex of (EXAMPLES_MAP[t.topic] || [])){
+          pool.push({topic: t.topic, text: ex});
+        }
+      }
+      if(pool.length === 0){
+        pool.push({topic:"general", text:"What is the procedure before maintenance?"});
+      }
+
+      pool.slice(0, 10).forEach(p=>{
+        const b = document.createElement("button");
+        b.className = "btn-secondary";
+        b.textContent = p.text.length > 34 ? p.text.slice(0,34) + "…" : p.text;
+        b.onclick = () => { setQ(p.text); document.getElementById("topicSelect").value = p.topic; };
+        examplesWrap.appendChild(b);
+      });
+
+      const defaultTopic = TOPICS.find(x=>x.topic==="isolation_loto")?.topic || TOPICS[0]?.topic || "";
+      if(defaultTopic){
+        sel.value = defaultTopic;
+        if(TEMPLATE_MAP[defaultTopic]) setQ(TEMPLATE_MAP[defaultTopic]);
+      }
+    }catch(e){
+      console.error(e);
     }
-  }catch(e){
-    console.error(e);
-    // keep your current static templates as a fallback if you want
   }
-}
+
   function setQ(t){ document.getElementById("q").value = t; }
 
   function applyTopicTemplate(){
     const selVal = document.getElementById("topicSelect").value;
     if(!selVal) return;
-
     const t = TEMPLATE_MAP[selVal] || "";
     if(t) setQ(t);
-
     document.getElementById("q").focus();
   }
 
@@ -546,17 +593,13 @@
   function setLoading(isLoading){
     const btn = document.getElementById("askBtn");
     const btnM = document.getElementById("askBtnMobile");
-
-    // btn may be hidden on mobile, but still exists
     btn.disabled = isLoading;
     btnM.disabled = isLoading;
-
     btn.classList.toggle("loading", isLoading);
     btnM.classList.toggle("loading", isLoading);
   }
 
   async function ask(fromMobile){
-    // sync topk between desktop + mobile
     const topic = document.getElementById("topicSelect").value || null;
     const topkDesktop = document.getElementById("topk");
     const topkMobile = document.getElementById("topkMobile");
@@ -564,7 +607,6 @@
     topkDesktop.value = chosenTopk;
     topkMobile.value = chosenTopk;
 
-    // FIX #1: snapshot question, then clear input immediately
     const qEl = document.getElementById("q");
     const q = (qEl.value || "").trim();
     if(!q){
@@ -595,7 +637,7 @@
 
       const text = await r.text();
       let j = null;
-      try { j = JSON.parse(text); } catch { /* ignore */ }
+      try { j = JSON.parse(text); } catch {}
 
       if(!r.ok){
         const msg = raw ? text : (j?.detail || "Request failed");
@@ -639,13 +681,10 @@
       document.getElementById("meta").style.display = "block";
       renderCitations(j.citations || []);
 
-      // auto-collapse citations on small screens (still user-expandable)
       const isSmall = window.matchMedia("(max-width: 680px)").matches;
       document.getElementById("citationsDetails").open = !isSmall;
 
       document.getElementById("copyBtn").disabled = false;
-
-      // On mobile, scroll to answer after asking
       document.getElementById("answerBox").scrollIntoView({behavior:"smooth", block:"start"});
     } catch(e){
       const msg = "Error: " + e.message;
@@ -674,6 +713,129 @@
     }
   }
 
+  /* ✅ NEW: Security test button logic */
+  function setSecurityStatus(state, text){
+    const dot = document.getElementById("secDot");
+    dot.className = "dot " + (state || "");
+    document.getElementById("secText").textContent = text;
+  }
+
+  function setSecurityLoading(isLoading){
+    const btn = document.getElementById("secBtn");
+    btn.disabled = isLoading;
+    btn.classList.toggle("loading", isLoading);
+  }
+
+  function renderSecurityFailures(report){
+    const failuresWrap = document.getElementById("secFailures");
+    failuresWrap.innerHTML = "";
+
+    const failedItems = (report?.results || []).filter(x => x && x.pass === false);
+    const failCountEl = document.getElementById("secFailCount");
+    failCountEl.textContent = failedItems.length ? `(${failedItems.length})` : "(0)";
+
+    if(!failedItems.length){
+      failuresWrap.innerHTML = `<div class="muted">No failures 🎉</div>`;
+      return;
+    }
+
+    for(const f of failedItems){
+      const policy = f.policy || {};
+      const blocked = Array.isArray(f.blocked_hits) ? f.blocked_hits : [];
+      const div = document.createElement("div");
+      div.className = "sec-item";
+      div.innerHTML = `
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <div>
+            <b>${(f.name || "unknown")}</b>
+            <span class="badge bad">FAIL</span>
+          </div>
+          <div class="muted" style="font-size:12px;">
+            mode: <b>${policy.mode || "n/a"}</b> · topic: <b>${policy.topic || "n/a"}</b>
+          </div>
+        </div>
+        <div class="small" style="margin-top:6px;">${(f.reason || "No reason provided").replaceAll("<","&lt;")}</div>
+        ${blocked.length ? `<div class="small" style="margin-top:6px;">Blocked hits: <span class="muted">${blocked.map(x=>`<code>${x}</code>`).join(", ")}</span></div>` : ""}
+      `;
+      failuresWrap.appendChild(div);
+    }
+  }
+
+  async function runSecurityTests(){
+    document.getElementById("secSummary").style.display = "none";
+    document.getElementById("secDetails").style.display = "none";
+    document.getElementById("secJsonDetails").style.display = "none";
+    document.getElementById("secJson").textContent = "";
+    setSecurityStatus("", "Security tests: running…");
+    setSecurityLoading(true);
+
+    try{
+      const r = await fetch("/rag/injection_test", {
+        method:"POST",
+        headers: {"Content-Type":"application/json"},
+      });
+
+      const text = await r.text();
+      let j = null;
+      try{ j = JSON.parse(text); } catch {}
+
+      if(!r.ok){
+        setSecurityStatus("bad", "Security tests: failed to run");
+        document.getElementById("secSummary").style.display = "block";
+        document.getElementById("secSummary").textContent = (j?.detail || text || "Request failed");
+        return;
+      }
+
+      lastSecurityReport = j;
+
+      const total = j.total ?? (j.results?.length ?? 0);
+      const passed = j.passed ?? 0;
+      const failed = j.failed ?? (total - passed);
+      const passRate = j.pass_rate ?? (total ? (passed/total) : 0);
+
+      const ok = (passRate === 1.0);
+      setSecurityStatus(ok ? "ok" : "bad", `Security tests: ${passed}/${total} passed (${Math.round(passRate*100)}%)`);
+
+      const summary = document.getElementById("secSummary");
+      summary.style.display = "block";
+      summary.innerHTML = ok
+        ? `<span class="badge ok">PASS</span> All security tests passed.`
+        : `<span class="badge bad">FAIL</span> ${failed} test(s) failed. Review failures below.`;
+
+      // failures section
+      document.getElementById("secDetails").style.display = "block";
+      renderSecurityFailures(j);
+
+      // optional JSON section
+      const showJson = document.getElementById("secRaw").checked;
+      document.getElementById("secJsonDetails").style.display = showJson ? "block" : "none";
+      if(showJson){
+        document.getElementById("secJson").textContent = JSON.stringify(j, null, 2);
+      }
+
+      // scroll into view so you can show the audience easily
+      document.getElementById("secPill").scrollIntoView({behavior:"smooth", block:"start"});
+    }catch(e){
+      setSecurityStatus("bad", "Security tests: error");
+      document.getElementById("secSummary").style.display = "block";
+      document.getElementById("secSummary").textContent = "Error: " + e.message;
+    }finally{
+      setSecurityLoading(false);
+    }
+  }
+
+  // toggle full JSON on checkbox change
+  document.addEventListener("change", (ev) => {
+    if(ev.target && ev.target.id === "secRaw"){
+      const show = ev.target.checked;
+      const box = document.getElementById("secJsonDetails");
+      box.style.display = show ? "block" : "none";
+      if(show){
+        document.getElementById("secJson").textContent = JSON.stringify(lastSecurityReport || {}, null, 2);
+      }
+    }
+  });
+
   // Ctrl+Enter / Cmd+Enter to send
   document.addEventListener("keydown", (ev) => {
     const isMac = navigator.platform.toUpperCase().includes("MAC");
@@ -687,6 +849,7 @@
   // defaults
   healthCheck();
   loadTopics();
+  setSecurityStatus("", "Security tests: not run");
 </script>
 </body>
 </html>
