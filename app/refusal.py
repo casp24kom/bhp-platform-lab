@@ -95,6 +95,32 @@ def _follow_up_questions(topic: str) -> List[str]:
     return out[:4]
 
 
+# ✅ NEW helper: prioritize topic-specific questions first (better UX for suggested_topic)
+def _prioritize_topic_specific(followups: List[str], topic: str) -> List[str]:
+    """
+    If we only *suggest* a topic (rescued-weak), re-order followups so
+    topic-specific questions appear first, then common questions.
+    """
+    topic_specific_keywords = {
+        "confined_space": ["entry permit", "standby", "rescue", "entrant", "confined"],
+        "hot_work": ["hot work", "welding", "cutting", "grinding", "fire watch", "extinguisher"],
+        "working_at_heights": ["harness", "lanyard", "anchor", "fall", "scaffold", "ewp", "guardrail"],
+        "isolation_loto": ["loto", "lockout", "tagout", "isolation", "prove", "try start", "group lock"],
+        "ppe": ["ppe", "respirator", "gloves", "boots", "hard hat", "hearing", "glasses"],
+    }
+    keys = topic_specific_keywords.get(topic, [])
+    if not keys:
+        return followups
+
+    def is_topic_specific(q: str) -> bool:
+        t = (q or "").lower()
+        return any(k in t for k in keys)
+
+    specific = [q for q in followups if is_topic_specific(q)]
+    common = [q for q in followups if not is_topic_specific(q)]
+    return specific + common
+
+
 def _format_help_into_answer(
     headline: str,
     followups: List[str],
@@ -229,6 +255,11 @@ def build_helpful_refusal(
     # even when the UI "topic" is kept as general.
     followup_topic = (suggested_topic or display_topic or "general")
     followups = _follow_up_questions(followup_topic)
+
+    # ✅ NEW: when we have suggested_topic, show topic-specific followups first
+    if suggested_topic:
+        followups = _prioritize_topic_specific(followups, suggested_topic)
+
     rephrases = _suggest_rephrases(question, followup_topic)
 
     headline = "I can’t confirm an answer from the approved SOP sources for that question."
