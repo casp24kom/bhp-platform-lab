@@ -1,11 +1,14 @@
 import os
 import time, uuid
+import json
+
+
 
 from typing import Optional, Literal, Any, Dict
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -25,6 +28,18 @@ from app.snowflake_audit import audit_dq
 app = FastAPI(title="Data & AI Platform Lab", version="1.0")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
+@app.get("/metrics")
+def metrics():
+    p = Path(__file__).resolve().parent / "static" / "metrics_latest.json"
+    if not p.exists():
+        return JSONResponse(
+            status_code=404,
+            content={"error": "metrics_latest.json not found. Run scripts/eval/run_eval.py first."}
+        )
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Failed to read metrics: {e}"})
 
 # ---- UI handling: serve static index if present, else redirect to /docs
 @app.get("/", include_in_schema=False)

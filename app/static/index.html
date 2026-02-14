@@ -375,7 +375,35 @@
             <div id="cites"></div>
           </details>
         </div>
+        <!-- ✅ NEW: Scoreboard -->
+<div class="sec-box" id="scoreboardBox">
+  <div class="row" style="justify-content:space-between;">
+    <div class="pill">
+      <span class="dot" id="sbDot"></span>
+      <span id="sbText">Scoreboard: not loaded</span>
+    </div>
+    <button class="btn-secondary" onclick="loadScoreboard()">Refresh Scoreboard</button>
+  </div>
 
+  <div class="kvs" style="margin-top:10px;">
+    <div class="cite-item"><div class="kv"><b>Recall@5</b>: <span id="mRecall5">—</span></div></div>
+    <div class="cite-item"><div class="kv"><b>MRR@5</b>: <span id="mMrr5">—</span></div></div>
+    <div class="cite-item"><div class="kv"><b>Grounded rate</b>: <span id="mGrounded">—</span></div></div>
+    <div class="cite-item"><div class="kv"><b>Hallucination rate</b>: <span id="mHallu">—</span></div></div>
+    <div class="cite-item"><div class="kv"><b>Allow/Deny acc</b>: <span id="mAllowAcc">—</span></div></div>
+    <div class="cite-item"><div class="kv"><b>Injection pass</b>: <span id="mInjPass">—</span></div></div>
+    <div class="cite-item"><div class="kv"><b>p95 latency</b>: <span id="mP95">—</span></div></div>
+    <div class="cite-item"><div class="kv"><b>Tool success</b>: <span id="mTool">N/A</span></div></div>
+  </div>
+
+  <details id="sbFailuresDetails" style="display:none; margin-top:10px;">
+    <summary>
+      Eval failures
+      <span class="summary-sub" id="sbFailCount"></span>
+    </summary>
+    <div id="sbFailures"></div>
+  </details>
+</div>
         <!-- ✅ NEW: Security tests -->
         <div class="sec-box">
           <div class="row" style="justify-content:space-between;">
@@ -467,6 +495,90 @@
   let lastAnswerText = "";
   let lastJson = null;
   let lastSecurityReport = null;
+
+  function setSbStatus(state, text){
+  const dot = document.getElementById("sbDot");
+  dot.className = "dot " + (state || "");
+  document.getElementById("sbText").textContent = text;
+}
+
+function fmtPct(x){
+  if (x === null || x === undefined) return "—";
+  return Math.round(x * 100) + "%";
+}
+
+async function loadScoreboard(){
+  setSbStatus("", "Scoreboard: loading…");
+
+  try{
+    const r = await fetch("/metrics", {cache:"no-store"});
+    const text = await r.text();
+    let j = null;
+    try{ j = JSON.parse(text); } catch {}
+
+    if(!r.ok){
+      setSbStatus("warn", "Scoreboard: not available (run eval script)");
+      console.warn(text);
+      return;
+    }
+
+    const m = j.metrics || {};
+    document.getElementById("mRecall5").textContent = fmtPct(m.recall_at_5);
+    document.getElementById("mMrr5").textContent = (m.mrr_at_5 ?? "—");
+    document.getElementById("mGrounded").textContent = fmtPct(m.grounded_answer_rate);
+    document.getElementById("mHallu").textContent = fmtPct(m.hallucination_rate);
+    document.getElementById("mAllowAcc").textContent = fmtPct(m.allow_deny_accuracy);
+    document.getElementById("mInjPass").textContent =
+      (m.prompt_injection_pass_rate === null || m.prompt_injection_pass_rate === undefined)
+        ? "—"
+        : fmtPct(m.prompt_injection_pass_rate);
+    document.getElementById("mP95").textContent =
+      (m.p95_latency_ms === null || m.p95_latency_ms === undefined) ? "—" : (m.p95_latency_ms + " ms");
+    document.getElementById("mTool").textContent =
+      (m.tool_call_success_rate === null || m.tool_call_success_rate === undefined) ? "N/A" : fmtPct(m.tool_call_success_rate);
+
+    // status color: green if hallucinations are zero AND allow accuracy is high AND injection pass is 1.0 (if present)
+    const ok = (m.hallucination_rate === 0 || m.hallucination_rate === 0.0) &&
+               (m.allow_deny_accuracy >= 0.9) &&
+               (m.prompt_injection_pass_rate === null || m.prompt_injection_pass_rate === 1.0);
+
+    setSbStatus(ok ? "ok" : "warn", `Scoreboard: ${j.run_id || "latest"} · cases=${j.n_cases ?? "?"}`);
+
+    // failures rendering
+    const failures = Array.isArray(j.failures) ? j.failures : [];
+    const details = document.getElementById("sbFailuresDetails");
+    const wrap = document.getElementById("sbFailures");
+    const count = document.getElementById("sbFailCount");
+    wrap.innerHTML = "";
+    count.textContent = failures.length ? `(${failures.length})` : "(0)";
+    details.style.display = failures.length ? "block" : "none";
+
+    failures.slice(0, 20).forEach(f=>{
+      const div = document.createElement("div");
+      div.className = "cite-item";
+      div.innerHTML = `
+        <div><b>${f.id}</b> — ${f.expected?.question || ""}</div>
+        <div class="small muted" style="margin-top:6px;">
+          expected_topic=<b>${f.expected?.expected_topic}</b>,
+          expected_allow=<b>${f.expected?.expected_allow}</b>
+        </div>
+        <div class="small muted" style="margin-top:6px;">
+          got_topic=<b>${f.observed?.policy?.topic || "n/a"}</b>,
+          suggested=<b>${f.observed?.policy?.suggested_topic || "n/a"}</b>,
+          allow=<b>${f.observed?.policy?.allow_generation}</b>
+        </div>
+        <div class="small muted" style="margin-top:6px;">
+          doc_ids=<b>${(f.observed?.doc_ids || []).join(", ")}</b>
+        </div>
+      `;
+      wrap.appendChild(div);
+    });
+
+  }catch(e){
+    setSbStatus("bad", "Scoreboard: error");
+    console.error(e);
+  }
+}
 
   async function loadTopics(){
     const sel = document.getElementById("topicSelect");
@@ -850,6 +962,7 @@
   healthCheck();
   loadTopics();
   setSecurityStatus("", "Security tests: not run");
+  loadScoreboard();
 </script>
 </body>
 </html>
