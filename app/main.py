@@ -1,9 +1,10 @@
 import os
 import time, uuid
 import json
+import ast
 
 
-
+from datetime import datetime
 from typing import Optional, Literal, Any, Dict
 from pathlib import Path
 
@@ -31,6 +32,45 @@ from app.snowflake_audit import audit_dq
 app = FastAPI(title="Data & AI Platform Lab", version="1.0")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
+def _normalize_variant(v):
+    """
+    Snowflake VARIANT sometimes comes back as:
+      - dict/list (already fine)
+      - a JSON string (needs json.loads)
+      - a Python-ish string (rare; ast.literal_eval fallback)
+    We normalize to a real JSON-serializable object.
+    """
+    if v is None:
+        return None
+
+    # already a JSON-ish type
+    if isinstance(v, (dict, list, int, float, bool)):
+        return v
+
+    # most common bug: it's a JSON string
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        # try JSON first
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+        # fallback: sometimes it looks like a Python dict repr
+        try:
+            return ast.literal_eval(s)
+        except Exception:
+            return {"_raw": v}
+
+    # last resort: stringify and try JSON
+    try:
+        return json.loads(str(v))
+    except Exception:
+        return {"_raw": str(v)}
+
+
+
 @app.get("/metrics")
 def metrics():
     # 1) Try Snowflake first (latest run)
@@ -54,21 +94,29 @@ def metrics():
 
         if row:
             run_id, run_ts, app_env, base_url, n_cases, metrics_variant, extra_variant = row
+
+            # convert run_ts nicely
+            if isinstance(run_ts, datetime):
+                run_ts_out = run_ts.isoformat()
+            else:
+                run_ts_out = str(run_ts)
+
             return {
                 "run_id": run_id,
-                "run_ts": str(run_ts),
+                "run_ts": run_ts_out,
                 "app_env": app_env,
                 "base_url": base_url,
-                "n_cases": int(n_cases),
-                "metrics": metrics_variant,
-                "extra": extra_variant,
-                "failures": []  # optional; you can store failures too if you want
+                "n_cases": int(n_cases) if n_cases is not None else 0,
+                # ✅ critical: normalize VARIANT -> dict
+                "metrics": _normalize_variant(metrics_variant) or {},
+                "extra": _normalize_variant(extra_variant) or {},
+                "failures": []  # optional: only if you store them in table later
             }
-    except Exception:
+    except Exception as e:
         # swallow and fall back to file
         pass
 
-    # 2) Fallback: file in static (what you already have)
+    # 2) Fallback: file in static
     p = Path(__file__).resolve().parent / "static" / "metrics_latest.json"
     if not p.exists():
         return JSONResponse(
@@ -80,6 +128,7 @@ def metrics():
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"Failed to read metrics: {e}"})
     
+     
 # ---- UI handling: serve static index if present, else redirect to /docs
 @app.get("/", include_in_schema=False)
 def root():
