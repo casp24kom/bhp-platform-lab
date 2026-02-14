@@ -522,9 +522,12 @@ async function loadScoreboard(){
       return;
     }
 
-    const m0 = j.metrics || {};
+    let m0 = j.metrics || {};
+    if (typeof m0 === "string") {
+      try { m0 = JSON.parse(m0); } catch(e) { m0 = {}; }
+    }
 // Support both shapes:
-// A) {metrics:{recall_at_5:...}}
+// A) {metrics:{recall_at_5:...}}==
 // B) {metrics:{metrics:{recall_at_5:...}}}
     const m = (m0 && typeof m0 === "object" && m0.metrics && typeof m0.metrics === "object") ? m0.metrics : m0;
 
