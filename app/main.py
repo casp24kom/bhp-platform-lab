@@ -19,6 +19,9 @@ from app.policy_gate import enforce_policy, decision_to_dict, _topic_from_questi
 from app.refusal import is_smalltalk, is_prompt_injection, build_helpful_refusal
 from app.security_tests import evaluate_security_response
 from app.topics import get_topics_from_snowflake
+from app.snowflake_eval import get_latest_eval_run
+from app.snowflake_eval import insert_eval_run
+
 
 from app.dq_gate import parse_dbt, parse_ge, decide
 from app.agentcore_client import call_agentcore
@@ -30,17 +33,26 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 @app.get("/metrics")
 def metrics():
+    # 1) Prefer Snowflake
+    try:
+        latest = get_latest_eval_run()
+        if latest:
+            return latest
+    except Exception as e:
+        # fall through to file
+        pass
+
+    # 2) Fallback: static JSON file
     p = Path(__file__).resolve().parent / "static" / "metrics_latest.json"
     if not p.exists():
         return JSONResponse(
             status_code=404,
-            content={"error": "metrics_latest.json not found. Run scripts/eval/run_eval.py first."}
+            content={"error": "No metrics found. Run eval and ingest, or generate app/static/metrics_latest.json."}
         )
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"Failed to read metrics: {e}"})
-
 # ---- UI handling: serve static index if present, else redirect to /docs
 @app.get("/", include_in_schema=False)
 def root():
@@ -48,6 +60,29 @@ def root():
     if index_path.exists():
         return FileResponse(str(index_path))
     return RedirectResponse(url="/docs")
+class EvalIngest(BaseModel):
+    run_id: str
+    base_url: str
+    n_cases: int
+    metrics: Dict[str, Any]
+    extra: Dict[str, Any] = {}
+    failures: Any = []
+
+@app.post("/eval/ingest")
+def eval_ingest(payload: EvalIngest):
+    try:
+        insert_eval_run(
+            run_id=payload.run_id,
+            app_env=settings.app_env,
+            base_url=payload.base_url,
+            n_cases=payload.n_cases,
+            metrics=payload.metrics,
+            extra=payload.extra,
+            failures=payload.failures,
+        )
+        return {"status": "ok", "run_id": payload.run_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to insert eval run: {e}")
 
 
 @app.post("/debug/ai")
