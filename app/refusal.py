@@ -31,6 +31,7 @@ _INJECTION_PATTERNS = [
     r"\bfor admin use\b|\badmin only\b|\binternal only\b",
     r"\bcall this external url\b|\bhttp(s)?://\S+\b",
     r"\brun this command\b|\bexecute\b.*\b(shell|bash|powershell)\b",
+    r"\balways answer\b|\banswer \"?yes\"? regardless\b",
 ]
 
 def is_prompt_injection(q: str) -> bool:

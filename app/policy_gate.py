@@ -4,6 +4,24 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 import re
 
+# -----------------------------
+# Instruction injection (user question tries to control behavior)
+# -----------------------------
+INSTRUCTION_INJECTION_PATTERNS = [
+    r"\balways answer\b",
+    r"\banswer\s+(only|just)\b",
+    r"\bregardless of\b",
+    r"\bignore (all|any) (previous|prior|above) instructions\b",
+    r"\bdo not refuse\b",
+    r"\bdo anything now\b",
+    r"\byou are now\b",
+    r"\bact as\b.*\bwithout\b.*\bpolicy\b",
+]
+
+def _is_instruction_injection(question: str) -> bool:
+    q = (question or "").strip().lower()
+    return any(re.search(p, q, flags=re.IGNORECASE) for p in INSTRUCTION_INJECTION_PATTERNS)
+
 
 # -----------------------------
 # Tunables (Point C + B)
@@ -241,11 +259,25 @@ def enforce_policy(question: str, chunks: List[Dict], topic_override: str | None
             confidence="high",
         )
 
+    # ✅ NEW: block instruction-injection attempts even if retrieval finds good chunks
+    if _is_instruction_injection(question):
+        # keep UI mostly neutral but still hint what the user was asking about
+        suggested = topic if topic != "general" else None
+        return PolicyDecision(
+            topic="general",
+            suggested_topic=suggested,
+            allow_generation=False,
+            risk_tier="CRITICAL",
+            mode="grounded",
+            reason="[CRITICAL] Refused: instruction-injection attempt in user question.",
+            matched_terms=[],
+            confidence="high",
+        )
     all_text = _chunk_texts(chunks)
     specific_terms = _extract_specific_terms(question)
     risk_tier = _doc_risk_tier(chunks)
-    
-        # HARD BLOCK: never answer from security_injection docs (even if retrieved)
+
+    # HARD BLOCK: never answer from security_injection docs (even if retrieved)
     if _has_security_injection_chunks(chunks):
         return PolicyDecision(
             topic="general",
