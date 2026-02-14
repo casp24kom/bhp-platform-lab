@@ -522,18 +522,26 @@ async function loadScoreboard(){
       return;
     }
 
-    const m = j.metrics || {};
+    const m0 = j.metrics || {};
+// Support both shapes:
+// A) {metrics:{recall_at_5:...}}
+// B) {metrics:{metrics:{recall_at_5:...}}}
+    const m = (m0 && typeof m0 === "object" && m0.metrics && typeof m0.metrics === "object") ? m0.metrics : m0;
+
     document.getElementById("mRecall5").textContent = fmtPct(m.recall_at_5);
     document.getElementById("mMrr5").textContent = (m.mrr_at_5 ?? "—");
     document.getElementById("mGrounded").textContent = fmtPct(m.grounded_answer_rate);
     document.getElementById("mHallu").textContent = fmtPct(m.hallucination_rate);
     document.getElementById("mAllowAcc").textContent = fmtPct(m.allow_deny_accuracy);
+
     document.getElementById("mInjPass").textContent =
       (m.prompt_injection_pass_rate === null || m.prompt_injection_pass_rate === undefined)
         ? "—"
         : fmtPct(m.prompt_injection_pass_rate);
+
     document.getElementById("mP95").textContent =
       (m.p95_latency_ms === null || m.p95_latency_ms === undefined) ? "—" : (m.p95_latency_ms + " ms");
+
     document.getElementById("mTool").textContent =
       (m.tool_call_success_rate === null || m.tool_call_success_rate === undefined) ? "N/A" : fmtPct(m.tool_call_success_rate);
 
