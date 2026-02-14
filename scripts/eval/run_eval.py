@@ -2,10 +2,18 @@ import json
 import os
 import re
 import time
+import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 import requests
+
+# Ensure repo root is on PYTHONPATH so `import app` works when running as a script
+REPO_ROOT = Path(__file__).resolve().parents[2]  # scripts/eval/run_eval.py -> repo root
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 
 # -----------------------------
 # Config
