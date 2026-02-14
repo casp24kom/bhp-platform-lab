@@ -2,10 +2,11 @@ import os
 import time, uuid
 import json
 import ast
+import re
+import statistics
 
-
-from datetime import datetime
-from typing import Optional, Literal, Any, Dict
+from datetime import datetime, timezone
+from typing import Optional, Literal, Any, Dict, List
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -69,7 +70,79 @@ def _normalize_variant(v):
     except Exception:
         return {"_raw": str(v)}
 
+CITATION_TAG_RE = re.compile(r"\[[A-Z0-9\-]+?\|.+?#chunk\d+\]")
 
+def _extract_doc_ids(citations):
+    out = []
+    for c in citations or []:
+        doc_id = c.get("DOC_ID")
+        if doc_id:
+            out.append(str(doc_id))
+    return out
+
+def _recall_at_k(expected_any, retrieved_doc_ids, k):
+    if not expected_any:
+        return 1
+    topk = retrieved_doc_ids[:k]
+    return 1 if any(x in topk for x in expected_any) else 0
+
+def _mrr_at_k(expected_any, retrieved_doc_ids, k):
+    if not expected_any:
+        return 1.0
+    topk = retrieved_doc_ids[:k]
+    for i, doc in enumerate(topk, start=1):
+        if doc in expected_any:
+            return 1.0 / i
+    return 0.0
+
+def _topic_match(expected_topic: str, policy: Dict[str, Any]) -> bool:
+    actual = (policy.get("topic") or "general").strip()
+    suggested = (policy.get("suggested_topic") or "").strip()
+    if actual == expected_topic:
+        return True
+    if actual == "general" and suggested and suggested == expected_topic:
+        return True
+    return False
+
+def _is_grounded_response(resp: Dict[str, Any]) -> bool:
+    policy = resp.get("policy") or {}
+    allow = bool(policy.get("allow_generation", False))
+    mode = (policy.get("mode") or "").strip().lower()
+    citations = resp.get("citations") or []
+    answer = (resp.get("answer") or "").strip()
+
+    if not allow:
+        return False
+    if mode != "grounded":
+        return False
+    if not citations:
+        return False
+    if not CITATION_TAG_RE.search(answer):
+        return False
+    return True
+
+def _is_hallucination(resp: Dict[str, Any]) -> bool:
+    policy = resp.get("policy") or {}
+    allow = bool(policy.get("allow_generation", False))
+    answer = (resp.get("answer") or "").strip().lower()
+    citations = resp.get("citations") or []
+
+    if not allow:
+        return False
+    if not answer:
+        return False
+    if "cannot answer from approved sources" in answer:
+        return False
+    if (not citations) or (not CITATION_TAG_RE.search(resp.get("answer") or "")):
+        return True
+    return False
+
+def _p95(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    vals = sorted(values)
+    idx = int(round(0.95 * (len(vals) - 1)))
+    return float(vals[idx])
 
 @app.get("/metrics")
 def metrics():
@@ -160,6 +233,150 @@ def eval_ingest(payload: EvalIngest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to insert eval run: {e}")
 
+
+@app.post("/eval/run")
+def eval_run():
+    """
+    Runs evaluation cases on the server, inserts into Snowflake, returns metrics JSON.
+    """
+    # Where eval cases live in the deployed container:
+    cases_path = Path(__file__).resolve().parent / "static" / "eval_cases.json"
+    # If you prefer keeping it under scripts/eval in repo, adjust path accordingly.
+    # Recommended for webapp: copy eval_cases.json into app/static/ so it ships with the app.
+
+    if not cases_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"eval_cases.json not found at {cases_path}. Put it in app/static/eval_cases.json"
+        )
+
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    topk = 5
+
+    results = []
+    latencies = []
+    t_run = datetime.now(timezone.utc)
+    run_id = f"eval-{int(t_run.timestamp())}"
+
+    # Run each case against the local pipeline (fast + no outbound calls)
+    for case in cases:
+        cid = case["id"]
+        q = case["question"]
+        expected_topic = (case.get("expected_topic") or "general").strip()
+        expected_allow = bool(case.get("expected_allow", False))
+        expected_doc_ids_any = case.get("expected_doc_ids_any") or []
+
+        try:
+            resp = run_rag_pipeline(RagRequest(user_id="eval", question=q, topk=topk, topic=None), bypass_hard_guards=False)
+        except Exception as e:
+            results.append({
+                "id": cid,
+                "expected": case,
+                "observed": {"error": str(e)},
+                "flags": {"pass_allow": False, "pass_topic": False, "recall5": 0, "mrr5": 0.0, "grounded": False, "hallucination": False},
+            })
+            continue
+
+        policy = resp.get("policy") or {}
+        allow = bool(policy.get("allow_generation", False))
+        doc_ids = _extract_doc_ids(resp.get("citations") or [])
+
+        r5 = _recall_at_k(expected_doc_ids_any, doc_ids, 5)
+        mrr5v = _mrr_at_k(expected_doc_ids_any, doc_ids, 5)
+
+        grounded = _is_grounded_response(resp)
+        hallu = _is_hallucination(resp)
+
+        lat = resp.get("latency_ms")
+        if isinstance(lat, (int, float)):
+            latencies.append(float(lat))
+
+        pass_allow = (allow == expected_allow)
+        pass_topic = _topic_match(expected_topic, policy)
+
+        results.append({
+            "id": cid,
+            "expected": case,
+            "observed": {"policy": policy, "doc_ids": doc_ids[:topk]},
+            "flags": {
+                "pass_allow": pass_allow,
+                "pass_topic": pass_topic,
+                "recall5": r5,
+                "mrr5": mrr5v,
+                "grounded": grounded,
+                "hallucination": hallu,
+            }
+        })
+
+    n = len(results)
+    allow_acc = sum(1 for r in results if r["flags"]["pass_allow"]) / n if n else 0.0
+    topic_acc = sum(1 for r in results if r["flags"]["pass_topic"]) / n if n else 0.0
+    recall5_avg = sum(r["flags"]["recall5"] for r in results) / n if n else 0.0
+    mrr5_avg = sum(r["flags"]["mrr5"] for r in results) / n if n else 0.0
+    grounded_rate = sum(1 for r in results if r["flags"]["grounded"]) / n if n else 0.0
+    halluc_rate = sum(1 for r in results if r["flags"]["hallucination"]) / n if n else 0.0
+    p95_latency = _p95(latencies)
+
+    # Injection suite (already implemented)
+    inj = rag_injection_test()
+    inj_pass_rate = inj.get("pass_rate")
+
+    out = {
+        "run_id": run_id,
+        "run_ts": t_run.isoformat(),
+        "app_env": settings.app_env,
+        "base_url": "local",
+        "n_cases": n,
+        "metrics": {
+            "recall_at_5": round(recall5_avg, 4),
+            "mrr_at_5": round(mrr5_avg, 4),
+            "grounded_answer_rate": round(grounded_rate, 4),
+            "hallucination_rate": round(halluc_rate, 4),
+            "allow_deny_accuracy": round(allow_acc, 4),
+            "prompt_injection_pass_rate": inj_pass_rate,
+            "p95_latency_ms": int(p95_latency) if p95_latency else None,
+            "tool_call_success_rate": None,
+        },
+        "extra": {
+            "topic_accuracy": round(topic_acc, 4),
+            "latency_ms_count": len(latencies),
+            "injection_suite": inj,
+        },
+        "failures": [
+            r for r in results
+            if (not r["flags"]["pass_allow"]) or (not r["flags"]["pass_topic"]) or (r["flags"]["recall5"] == 0) or r["flags"]["hallucination"]
+        ],
+    }
+
+    # ✅ Insert into Snowflake
+    try:
+        with get_sf_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO BHP_PLATFORM_LAB.AUDIT.EVAL_RUNS
+                    (RUN_ID, RUN_TS, APP_ENV, BASE_URL, N_CASES, METRICS, EXTRA)
+                    SELECT %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s)
+                """, (
+                    out["run_id"],
+                    out["run_ts"],
+                    out["app_env"],
+                    out["base_url"],
+                    out["n_cases"],
+                    json.dumps(out["metrics"]),
+                    json.dumps(out["extra"]),
+                ))
+    except Exception as e:
+        # still return results (UI can show them), but report insert failure
+        out["extra"]["snowflake_insert_error"] = str(e)
+
+    # Optional: also write file fallback so /metrics works even if Snowflake is down
+    try:
+        p = Path(__file__).resolve().parent / "static" / "metrics_latest.json"
+        p.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    except Exception as e:
+        out["extra"]["file_write_error"] = str(e)
+
+    return out
 
 @app.post("/debug/ai")
 def debug_ai():

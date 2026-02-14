@@ -382,7 +382,7 @@
       <span class="dot" id="sbDot"></span>
       <span id="sbText">Scoreboard: not loaded</span>
     </div>
-    <button class="btn-secondary" onclick="loadScoreboard()">Refresh Scoreboard</button>
+    <button class="btn-secondary" id="sbRunBtn" onclick="runEvalAndRefresh()">Run Eval + Refresh</button>
   </div>
 
   <div class="kvs" style="margin-top:10px;">
@@ -588,6 +588,56 @@ async function loadScoreboard(){
   }catch(e){
     setSbStatus("bad", "Scoreboard: error");
     console.error(e);
+  }
+}
+
+function setSbLoading(isLoading){
+  const btn = document.getElementById("sbRunBtn");
+  if(!btn) return;
+  btn.disabled = isLoading;
+  btn.classList.toggle("loading", isLoading);
+}
+
+async function runEvalAndRefresh(){
+  setSbStatus("", "Scoreboard: running eval…");
+  setSbLoading(true);
+
+  try{
+    // Run eval on the server (this also inserts into Snowflake)
+    const r = await fetch("/eval/run", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      cache: "no-store"
+    });
+
+    const text = await r.text();
+    let j = null;
+    try{ j = JSON.parse(text); } catch {}
+
+    if(!r.ok){
+      setSbStatus("bad", "Scoreboard: eval failed");
+      console.warn("eval/run failed:", text);
+      return;
+    }
+
+    // After eval finishes, load the latest metrics via /metrics
+    // (ensures UI matches Snowflake/latest server state)
+    await loadScoreboard();
+
+    // Optional: show insert errors clearly (if Snowflake insert failed)
+    const insertErr = j?.extra?.snowflake_insert_error;
+    if(insertErr){
+      setSbStatus("warn", "Scoreboard: updated (Snowflake insert failed)");
+      console.warn("Snowflake insert error:", insertErr);
+    } else {
+      setSbStatus("ok", `Scoreboard: ${j.run_id || "latest"} · cases=${j.n_cases ?? "?"}`);
+    }
+
+  } catch(e){
+    setSbStatus("bad", "Scoreboard: error running eval");
+    console.error(e);
+  } finally {
+    setSbLoading(false);
   }
 }
 
