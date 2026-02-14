@@ -194,7 +194,7 @@ def build_helpful_refusal(
         rephrases = _suggest_rephrases(question, "general")
 
         answer = (
-            "I can’t help with requests to ignore rules, reveal hidden instructions, or disclose secrets.\n"
+            "I can’t help with requests to bypass rules, reveal internal prompts/instructions, or disclose sensitive credentials.\n"
             "If you have an SOP-related question, I can help *only* by citing approved SOP excerpts.\n\n"
             + _format_help_into_answer("", followups, rephrases).lstrip()
         ).strip()
@@ -203,7 +203,7 @@ def build_helpful_refusal(
             "type": "prompt_injection",
             "risk_tier": risk_tier,
             "topic": display_topic,
-            "reason": "Out of scope / security: prompt injection or secret-exfiltration attempt.",
+            "reason": "Out of scope / security: prompt injection or credential-exfiltration attempt.",
             "what_i_need": followups,
             "try_asking": rephrases,
             "notes": [
