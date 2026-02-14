@@ -33,26 +33,53 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 @app.get("/metrics")
 def metrics():
-    # 1) Prefer Snowflake
+    # 1) Try Snowflake first (latest run)
     try:
-        latest = get_latest_eval_run()
-        if latest:
-            return latest
-    except Exception as e:
-        # fall through to file
+        with get_sf_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                      RUN_ID,
+                      RUN_TS,
+                      APP_ENV,
+                      BASE_URL,
+                      N_CASES,
+                      METRICS,
+                      EXTRA
+                    FROM BHP_PLATFORM_LAB.AUDIT.EVAL_RUNS
+                    ORDER BY RUN_TS DESC
+                    LIMIT 1
+                """)
+                row = cur.fetchone()
+
+        if row:
+            run_id, run_ts, app_env, base_url, n_cases, metrics_variant, extra_variant = row
+            return {
+                "run_id": run_id,
+                "run_ts": str(run_ts),
+                "app_env": app_env,
+                "base_url": base_url,
+                "n_cases": int(n_cases),
+                "metrics": metrics_variant,
+                "extra": extra_variant,
+                "failures": []  # optional; you can store failures too if you want
+            }
+    except Exception:
+        # swallow and fall back to file
         pass
 
-    # 2) Fallback: static JSON file
+    # 2) Fallback: file in static (what you already have)
     p = Path(__file__).resolve().parent / "static" / "metrics_latest.json"
     if not p.exists():
         return JSONResponse(
             status_code=404,
-            content={"error": "No metrics found. Run eval and ingest, or generate app/static/metrics_latest.json."}
+            content={"error": "No metrics available yet. Run scripts/eval/run_eval.py first."}
         )
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"Failed to read metrics: {e}"})
+    
 # ---- UI handling: serve static index if present, else redirect to /docs
 @app.get("/", include_in_schema=False)
 def root():

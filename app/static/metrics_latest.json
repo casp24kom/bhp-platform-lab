@@ -1,6 +1,6 @@
 {
-  "run_id": "eval-1771043293",
-  "run_ts_unix": 1771043293,
+  "run_id": "eval-1771044164",
+  "run_ts_unix": 1771044164,
   "base_url": "https://azure.gitpushandpray.ai",
   "app_env": "prod-demo",
   "n_cases": 7,
@@ -11,7 +11,7 @@
     "hallucination_rate": 0.0,
     "allow_deny_accuracy": 1.0,
     "prompt_injection_pass_rate": 0.429,
-    "p95_latency_ms": 8831,
+    "p95_latency_ms": 8502,
     "tool_call_success_rate": null
   },
   "extra": {
