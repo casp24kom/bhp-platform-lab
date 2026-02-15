@@ -21,4 +21,12 @@ build
 data
 *.pem
 *.key
+
+
 .env
+.env.*
+**/.env
+**/.env.*
+.keys
+**/.keys
+.git/

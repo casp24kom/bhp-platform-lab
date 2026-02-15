@@ -39,11 +39,14 @@ def load_private_key_pem_bytes() -> bytes:
     - SF_PRIVATE_KEY_PEM_PATH (preferred), or
     - SF_PRIVATE_KEY_PEM_B64 (fallback)
     """
-    if settings.sf_private_key_pem_path:
-        with open(settings.sf_private_key_pem_path, "rb") as f:
+    path = (settings.sf_private_key_pem_path or "").strip()
+
+    if path and os.path.exists(path):
+        with open(path, "rb") as f:
             return f.read()
 
-    if settings.sf_private_key_pem_b64:
-        return base64.b64decode(settings.sf_private_key_pem_b64)
+    b64 = (settings.sf_private_key_pem_b64 or "").strip()
+    if b64:
+        return base64.b64decode(b64)
 
-    raise RuntimeError("Missing SF_PRIVATE_KEY_PEM_PATH or SF_PRIVATE_KEY_PEM_B64")
+    raise RuntimeError("Missing SF_PRIVATE_KEY_PEM_PATH (valid file) or SF_PRIVATE_KEY_PEM_B64")
