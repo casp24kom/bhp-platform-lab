@@ -31,6 +31,27 @@ class Settings(BaseModel):
     agentcore_endpoint: str = os.getenv("AGENTCORE_ENDPOINT", "https://bedrock-agentcore.ap-southeast-2.amazonaws.com")
     agentcore_agent_id: str = os.getenv("AGENTCORE_AGENT_ID", "")
 
+import json
+import boto3
+
+def _load_sf_from_secrets_manager():
+    secret_name = os.getenv("SF_SECRET_NAME", "")
+    if not secret_name:
+        return
+
+    # Only fill missing values (don’t overwrite App Runner env vars)
+    sm = boto3.client("secretsmanager", region_name=os.getenv("AWS_REGION", "ap-southeast-2"))
+    resp = sm.get_secret_value(SecretId=secret_name)
+    data = json.loads(resp.get("SecretString") or "{}")
+
+    for k, v in data.items():
+        if v is None:
+            continue
+        if os.getenv(k, "") == "":
+            os.environ[k] = str(v)
+
+_load_sf_from_secrets_manager()
+
 settings = Settings()
 
 def load_private_key_pem_bytes() -> bytes:
