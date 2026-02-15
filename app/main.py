@@ -380,13 +380,18 @@ def eval_run():
 
 @app.post("/debug/ai")
 def debug_ai():
+    q = "What do I do before maintenance?"
     chunks = [{
+        "DOC_ID": "SYN-ISO-001",
         "DOC_NAME": "Synthetic SOP: Isolation",
         "CHUNK_ID": 1,
-        "CHUNK_TEXT": "Apply lockout/tagout before maintenance. Verify zero energy state."
+        "CHUNK_TEXT": "Apply lockout/tagout before maintenance. Verify zero energy state.",
+        "DOC_TOPIC": "isolation_loto",
+        "DOC_RISK_TIER": "LOW",
     }]
-    ans = generate_answer_in_snowflake("What do I do before maintenance?", chunks)
-    return {"answer": ans}
+    ans = generate_answer_in_snowflake(q, chunks)
+    preface = _make_polite_preface(q, topic="isolation_loto", risk_tier="LOW", had_chunks=True)
+    return {"answer": f"{preface}\n\n{ans}"}
 
 
 @app.get("/debug/env")
@@ -455,6 +460,28 @@ def meta_topics():
 # ============================================================
 # Shared RAG pipeline runner (MUST be above /rag/query endpoint)
 # ============================================================
+
+def _make_polite_preface(question: str, topic: str, risk_tier: str, had_chunks: bool) -> str:
+    """
+    One-sentence preface that works in both plaintext and markdown renderers.
+    Avoid markdown tokens (#, >, 1., etc).
+    """
+    q = (question or "").strip()
+    q = re.sub(r"\s+", " ", q)
+
+    # keep it short so UI doesn't wrap weirdly
+    if len(q) > 180:
+        q = q[:177] + "..."
+
+    t = (topic or "general").strip() or "general"
+    r = (risk_tier or "LOW").upper().strip() or "LOW"
+
+    # Use plain quotes (") not smart quotes; some renderers get weird.
+    if not had_chunks:
+        return f'Thanks — you asked: "{q}"; I could not retrieve relevant SOP excerpts for topic "{t}", so I cannot provide a grounded SOP answer:'
+    return f'Sure — you asked: "{q}"; based on the retrieved SOP excerpts (topic "{t}", risk tier "{r}"), here is what applies:'
+
+
 def run_rag_pipeline(
     req: RagRequest,
     *,
@@ -629,6 +656,15 @@ def run_rag_pipeline(
                 bullets.append(f"- {txt} [{c.get('DOC_ID')}|{c.get('DOC_NAME')}#chunk{c.get('CHUNK_ID')}]")
         answer = "\n".join(bullets) if bullets else answer
 
+    # ✅ add polite preface without affecting Snowflake bullet validation
+    preface = _make_polite_preface(
+        question=req.question,
+        topic=(policy.get("topic") or topic or "general"),
+        risk_tier=(policy.get("risk_tier") or policy_decision.risk_tier or "LOW"),
+        had_chunks=bool(gen_chunks),
+    )
+    answer = f"{preface}\n\n{answer}"
+
     latency_ms = int((time.time() - t0) * 1000)
     audit_rag(request_id, req.user_id, req.question, req.topk, gen_chunks, answer, latency_ms, policy=policy)
 
@@ -638,7 +674,7 @@ def run_rag_pipeline(
         "policy": policy,
         "citations": gen_chunks,
         "latency_ms": latency_ms,
-    }
+}
 
 
 # ============================================================
