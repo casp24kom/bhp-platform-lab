@@ -119,6 +119,9 @@ cat > /tmp/apprunner-create.json <<JSON
     "HealthyThreshold": 1,
     "UnhealthyThreshold": 10
   }
+  "ObservabilityConfiguration": {
+  "ObservabilityEnabled": true
+  }
 }
 JSON
 
