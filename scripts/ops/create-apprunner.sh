@@ -64,7 +64,7 @@ if [[ $ROLE_EXISTS -ne 0 ]]; then
   "Statement": [
     {
       "Effect": "Allow",
-      "Principal": { "Service": "build.apprunner.amazonaws.com" },
+      "Principal": { "Service": ["build.apprunner.amazonaws.com","tasks.apprunner.amazonaws.com"] },
       "Action": "sts:AssumeRole"
     }
   ]
