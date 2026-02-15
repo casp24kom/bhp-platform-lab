@@ -113,7 +113,11 @@ cat > /tmp/apprunner-create.json <<JSON
   },
   "HealthCheckConfiguration": {
     "Protocol": "HTTP",
-    "Path": "${HEALTH_PATH}"
+    "Path": "${HEALTH_PATH}",
+    "Interval": 10,
+    "Timeout": 5,
+    "HealthyThreshold": 1,
+    "UnhealthyThreshold": 10
   }
 }
 JSON
