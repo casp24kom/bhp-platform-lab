@@ -3,6 +3,38 @@ load_dotenv()
 from pydantic import BaseModel
 import os, base64
 
+
+# NEW: pull SF_* from AWS Secrets Manager if SF_SECRET_ID is set
+from app.aws_secrets import hydrate_env_from_secrets_manager
+hydrate_env_from_secrets_manager()
+
+from pydantic import BaseModel
+import os, base64
+
+import json
+import boto3
+import os
+
+def _hydrate_from_secrets_manager():
+    secret_id = os.getenv("SF_SECRET_ID", "")
+    if not secret_id:
+        return
+
+    # Only hydrate if not already provided via env
+    if os.getenv("SF_PRIVATE_KEY_PEM_B64") or os.getenv("SF_PRIVATE_KEY_PEM_PATH"):
+        return
+
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "ap-southeast-2"
+    sm = boto3.client("secretsmanager", region_name=region)
+    resp = sm.get_secret_value(SecretId=secret_id)
+    data = json.loads(resp["SecretString"])
+
+    # Put into process env so Settings() picks it up
+    for k in ["SF_PRIVATE_KEY_PEM_B64","SF_ACCOUNT_IDENTIFIER","SF_ACCOUNT_URL","SF_USER","SF_PUBLIC_KEY_FP"]:
+        if k in data and data[k]:
+            os.environ.setdefault(k, data[k])
+
+_hydrate_from_secrets_manager()
 class Settings(BaseModel):
     app_env: str = os.getenv("APP_ENV", "prod-demo")
     data_dir: str = os.getenv("DATA_DIR", "/data")
