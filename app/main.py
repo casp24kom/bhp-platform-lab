@@ -33,6 +33,22 @@ from app.snowflake_audit import audit_dq
 app = FastAPI(title="Data & AI Platform Lab", version="1.0")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
+from app.snowflake_conn import get_sf_connection
+
+@app.get("/debug/dq_audit_last")
+def dq_audit_last():
+    sql = """
+    SELECT RUN_ID, TS, USER_ID, VERDICT, LATENCY_MS
+    FROM BHP_PLATFORM_LAB.AUDIT.DQ_GATE_RUNS
+    ORDER BY TS DESC
+    LIMIT 10
+    """
+    with get_sf_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+    return {"rows": rows}
+
 def _normalize_variant(v):
     """
     Snowflake VARIANT sometimes comes back as:
