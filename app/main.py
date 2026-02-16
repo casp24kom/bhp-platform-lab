@@ -850,6 +850,10 @@ def dq_evaluate(req: DqRequest):
 
     except Exception as e:
         # Safe logging: placeholders match args
-        logger.exception("DQ evaluate failed stage=%s run_id=%s", stage, run_id)
+        logger.info("DQ request: %s", req)
+        logger.info("DQ request: %s", req.model_dump())
+        logger.error("DQ failed: %s", e)
+        logger.exception("DQ failed")  # auto includes traceback
+        #logger.exception("DQ evaluate failed stage=%s run_id=%s", stage, run_id)
         # Tell caller *which stage* failed
         raise HTTPException(status_code=500, detail=f"{stage}: {e}")
