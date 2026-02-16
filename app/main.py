@@ -809,7 +809,8 @@ def dq_evaluate(req: DqRequest):
         signals = [parse_dbt(req.dbt_run_results), parse_ge(req.ge_validation)]
         decision = decide(signals)
         agent_out = call_agentcore(decision)
-        latency_ms = int((time.time()-t0)*1000)
+        latency_ms = int((time.time() - t0) * 1000)
+
         audit_dq(
             run_id,
             req.user_id,
@@ -818,16 +819,18 @@ def dq_evaluate(req: DqRequest):
             decision["signals"],
             agent_out.get("ticket", {}),
             agent_out.get("runbook", {}),
-            latency_ms
+            latency_ms,
         )
+
         return {
             "run_id": run_id,
             "verdict": decision["verdict"],
             "reasons": decision["reasons"],
             "signals": decision["signals"],
             "ticket_draft": agent_out.get("ticket", {}),
-      raise HTTPException(status_code=500, detail=str(e))        "runbook_draft": agent_out.get("runbook", {}),
-            "latency_ms": latency_ms
+            "runbook_draft": agent_out.get("runbook", {}),
+            "latency_ms": latency_ms,
         }
+
     except Exception as e:
-      
+        raise HTTPException(status_code=500, detail=str(e))
