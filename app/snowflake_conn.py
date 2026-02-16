@@ -34,15 +34,18 @@ def get_sf_connection():
     if not settings.sf_warehouse:
         raise RuntimeError("SF_WAREHOUSE is missing/blank")
 
+    # Use the locator derived from URL (less chance of mismatch)
     account_locator = _account_locator_from_url(settings.sf_account_url)
     private_key_der = _private_key_der()
 
     return snowflake.connector.connect(
-        account=settings.sf_account_identifier,
+        account=account_locator,              # <— IMPORTANT (use this, not sf_account_identifier)
         user=settings.sf_user,
         private_key=private_key_der,
         role=settings.sf_role,
         warehouse=settings.sf_warehouse,
         database=settings.sf_database,
         schema=settings.sf_schema,
+        autocommit=True,                      # <— IMPORTANT
+        application="bhp-platform-lab",        # optional but nice for visibility
     )
