@@ -234,6 +234,15 @@ def eval_ingest(payload: EvalIngest):
         raise HTTPException(status_code=500, detail=f"Failed to insert eval run: {e}")
 
 
+
+@app.get("/debug/sf")
+def debug_sf():
+    return {
+        "SF_SECRET_ID": os.getenv("SF_SECRET_ID"),
+        "SF_PRIVATE_KEY_PEM_B64_len": len(os.getenv("SF_PRIVATE_KEY_PEM_B64","")),
+        "SF_PRIVATE_KEY_PEM_PATH": os.getenv("SF_PRIVATE_KEY_PEM_PATH",""),
+    }
+
 @app.post("/eval/run")
 def eval_run():
     """
