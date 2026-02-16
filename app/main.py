@@ -802,8 +802,26 @@ def rag_self_test():
 
 
 import traceback
+import json
 import logging
+
 logger = logging.getLogger(__name__)
+
+def audit_dq(run_id, user_id, verdict, reasons, signals, ticket, runbook, latency_ms):
+    try:
+        # (example) serialize dict/list fields before inserting into Snowflake
+        reasons_json = json.dumps(reasons, ensure_ascii=False)
+        signals_json = json.dumps(signals, ensure_ascii=False)
+        ticket_json  = json.dumps(ticket, ensure_ascii=False)
+        runbook_json = json.dumps(runbook, ensure_ascii=False)
+
+        # ... your INSERT using cursor.execute(sql, params) ...
+        # cursor.execute(SQL, (run_id, user_id, verdict, reasons_json, signals_json, ticket_json, runbook_json, latency_ms))
+
+    except Exception as e:
+        # IMPORTANT: do not pass `e` as a separate arg unless your msg has %s
+        logger.exception("audit_dq failed: %s", e)
+        raise Exception(f"audit_dq: {e}") from e
 
 @app.post("/dq/evaluate")
 def dq_evaluate(req: DqRequest):
