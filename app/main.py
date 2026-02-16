@@ -801,16 +801,32 @@ def rag_self_test():
     }
 
 
+import traceback
+import logging
+logger = logging.getLogger(__name__)
+
 @app.post("/dq/evaluate")
 def dq_evaluate(req: DqRequest):
     run_id = str(uuid.uuid4())
     t0 = time.time()
+    stage = "start"
+
     try:
-        signals = [parse_dbt(req.dbt_run_results), parse_ge(req.ge_validation)]
-        decision = decide(signals)
+        stage = "parse_dbt"
+        s_dbt = parse_dbt(req.dbt_run_results)
+
+        stage = "parse_ge"
+        s_ge = parse_ge(req.ge_validation)
+
+        stage = "decide"
+        decision = decide([s_dbt, s_ge])
+
+        stage = "call_agentcore"
         agent_out = call_agentcore(decision)
+
         latency_ms = int((time.time() - t0) * 1000)
 
+        stage = "audit_dq"
         audit_dq(
             run_id,
             req.user_id,
@@ -833,4 +849,7 @@ def dq_evaluate(req: DqRequest):
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Safe logging: placeholders match args
+        logger.exception("DQ evaluate failed stage=%s run_id=%s", stage, run_id)
+        # Tell caller *which stage* failed
+        raise HTTPException(status_code=500, detail=f"{stage}: {e}")
