@@ -39,13 +39,12 @@ def get_sf_connection():
     private_key_der = _private_key_der()
 
     return snowflake.connector.connect(
-        account=account_locator,              # <— IMPORTANT (use this, not sf_account_identifier)
-        user=settings.sf_user,
-        private_key=private_key_der,
-        role=settings.sf_role,
-        warehouse=settings.sf_warehouse,
-        database=settings.sf_database,
-        schema=settings.sf_schema,
-        autocommit=True,                      # <— IMPORTANT
-        application="bhp-platform-lab",        # optional but nice for visibility
-    )
+    account=settings.sf_account_identifier,
+    user=settings.sf_user,
+    private_key=private_key_der,
+    role=settings.sf_role,
+    warehouse=settings.sf_warehouse,
+    database=settings.sf_database,
+    schema=settings.sf_schema,
+    autocommit=True,
+)
