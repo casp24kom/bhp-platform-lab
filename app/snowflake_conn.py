@@ -39,7 +39,7 @@ def get_sf_connection():
     private_key_der = _private_key_der()
 
     return snowflake.connector.connect(
-    account=settings.sf_account_identifier,
+    account=account_locator,   # ✅ use the locator derived from SF_ACCOUNT_URL
     user=settings.sf_user,
     private_key=private_key_der,
     role=settings.sf_role,
