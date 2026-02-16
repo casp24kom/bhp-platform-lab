@@ -826,8 +826,8 @@ def dq_evaluate(req: DqRequest):
             "reasons": decision["reasons"],
             "signals": decision["signals"],
             "ticket_draft": agent_out.get("ticket", {}),
-            "runbook_draft": agent_out.get("runbook", {}),
+      raise HTTPException(status_code=500, detail=str(e))        "runbook_draft": agent_out.get("runbook", {}),
             "latency_ms": latency_ms
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+      
