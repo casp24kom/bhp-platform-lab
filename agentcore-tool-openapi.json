@@ -1,37 +1,36 @@
+
 {
-  "openapi": "3.0.0",
-  "info": { "title": "AgentCore Tool API", "version": "1.0.0" },
+  "openapi": "3.0.1",
+  "info": {
+    "title": "AgentCore Tool API",
+    "version": "1.0.0"
+  },
   "paths": {
     "/callAgentCore": {
       "post": {
         "operationId": "callAgentCore",
-        "description": "Send a question to AgentCore and return the result.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "question": { "type": "string" }
-                },
-                "required": ["question"]
-              }
-            }
+        "description": "Call AgentCore orchestration/integration layer and return its result.",
+        "parameters": [
+          {
+            "name": "question",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "context",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Optional JSON string context"
           }
-        },
+        ],
         "responses": {
           "200": {
             "description": "OK",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "answer": { "type": "string" }
-                  },
-                  "required": ["answer"]
-                }
+                "schema": { "type": "object" }
               }
             }
           }
