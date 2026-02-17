@@ -1,0 +1,16 @@
+{
+  "openapi": "3.0.1",
+  "info": { "title": "AgentCore Tool", "version": "1.0.0" },
+  "paths": {
+    "/agentcore": {
+      "post": {
+        "operationId": "agentcore",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type":"object" } } }
+        },
+        "responses": { "200": { "description": "AgentCore output" } }
+      }
+    }
+  }
+}

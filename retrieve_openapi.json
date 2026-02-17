@@ -1,0 +1,22 @@
+{
+  "openapi": "3.0.1",
+  "info": { "title": "Retrieve SOP Chunks", "version": "1.0.0" },
+  "paths": {
+    "/retrieve": {
+      "post": {
+        "operationId": "retrieve",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": {
+            "type":"object",
+            "properties": { "query": { "type":"string" } },
+            "required": ["query"]
+          }}}
+        },
+        "responses": {
+          "200": { "description": "Retrieved citations" }
+        }
+      }
+    }
+  }
+}
