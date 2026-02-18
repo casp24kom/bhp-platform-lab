@@ -1,6 +1,6 @@
 -- BHP_PLATFORM_LAB – Snowflake validation checklist
 -- Run in Snowsight (as ACCOUNTADMIN or your app role)
-
+USE ROLE BHP_LAB_APP_ROLE;
 -- 1) Confirm enriched view exists
 SHOW VIEWS LIKE 'SOP_CHUNKS_ENRICHED' IN SCHEMA BHP_PLATFORM_LAB.KB;
 
@@ -17,7 +17,7 @@ SHOW CORTEX SEARCH SERVICES IN SCHEMA BHP_PLATFORM_LAB.KB;
 -- Replace <SERVICE_NAME> with the service you see above.
 SELECT
   SNOWFLAKE.CORTEX.SEARCH_PREVIEW(
-    'BHP_PLATFORM_LAB.KB.<SERVICE_NAME>',
+    'BHP_PLATFORM_LAB.KB.SOP_SEARCH',
     '{
       "query": "lockout tagout procedure before maintenance",
       "columns": ["DOC_ID","DOC_NAME","CHUNK_ID","CHUNK_TEXT","DOC_TOPIC","DOC_RISK_TIER"],
@@ -37,7 +37,7 @@ FROM TABLE(
   FLATTEN(
     INPUT => PARSE_JSON(
       SNOWFLAKE.CORTEX.SEARCH_PREVIEW(
-        'BHP_PLATFORM_LAB.KB.<SERVICE_NAME>',
+        'BHP_PLATFORM_LAB.KB.SOP_SEARCH',
         '{
           "query": "lockout tagout procedure before maintenance",
           "columns": ["DOC_ID","DOC_NAME","CHUNK_ID","CHUNK_TEXT","DOC_TOPIC","DOC_RISK_TIER"],
